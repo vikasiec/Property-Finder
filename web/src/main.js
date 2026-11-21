@@ -22,8 +22,6 @@ const KINDS = [
   ['plot', 'Plots', '<path d="M4 6l8-3 8 3v12l-8 3-8-3zM12 3v18M4 6l16 12"/>'],
 ];
 const AMEN_LABELS = { squash: 'Squash', pool: 'Pool', gym: 'Gym', club: 'Clubhouse', tennis: 'Tennis', badminton: 'Badminton', jogging: 'Jogging track', kids: 'Kids play' };
-const DIVY = { // Divy's own Gurugram search, shown as the example
-  ...structuredClone(DEFAULT_CRITERIA), kinds: ['apartment'], bhk: [2, 3, 4], roomArea: 138, minSqft: 1620, amenities: ['squash'] }; // 11'3" x 12'3" = 138 sq ft
 const STATE_LABEL = { match: 'Matches your search', likely: 'Likely match', probable: 'Probably fits (estimated)', unknown: 'Not checked yet', no: 'Does not match' };
 
 let crit = structuredClone(DEFAULT_CRITERIA);
@@ -104,7 +102,6 @@ async function boot() {
 
 function intro() {
   closeCard();
-  if (params.get('preset') === 'divy') useCriteria(DIVY);
   if (params.get('open')) {
     map.jumpTo(OVERVIEW);
     applyFilters();
@@ -163,13 +160,6 @@ function dualRange(el, { min, max, step, fmt, onChange }) {
   lo.oninput = move('lo'); hi.oninput = move('hi');
   for (const r of [lo, hi]) r.onpointerup = r.onblur = () => el.classList.remove('active');
   return api;
-}
-
-function useCriteria(c) {
-  crit = structuredClone(c);
-  roomMode = crit.roomArea ? 'area' : 'off';
-  redrawFilters();
-  applyFilters();
 }
 
 let redrawFilters = () => {};
@@ -245,7 +235,6 @@ function buildFilters() {
   $('amen-q').oninput = amenList;
   $('f-ready').onchange = () => { crit.ready = $('f-ready').checked; applyFilters(); };
   $('f-sort').onchange = () => { sortBy = $('f-sort').value; renderResults(); };
-  $('preset-divy').onclick = () => useCriteria(DIVY);
   $('btn-replay').onclick = intro;
   $('btn-tour').onclick = tour;
   $('btn-hide').onclick = () => document.body.classList.toggle('bare');
@@ -637,17 +626,16 @@ function buildOnboarding() {
   let i = 0;
   const show = () => {
     $('ob-steps').innerHTML = steps.map((_, j) => `<i class="${j === i ? 'on' : ''}"></i>`).join('');
-    $('ob-body').innerHTML = `<h3>${steps[i][0]}</h3><p>${steps[i][1]}</p>${i === 1 ? '<button class="preset" id="ob-divy">Try an example search</button>' : ''}`;
+    $('ob-body').innerHTML = `<h3>${steps[i][0]}</h3><p>${steps[i][1]}</p>`;
     $('ob-back').hidden = i === 0;
     $('ob-next').textContent = i === steps.length - 1 ? 'Start exploring' : 'Next';
-    $('ob-divy')?.addEventListener('click', () => { useCriteria(DIVY); done(); });
   };
   const done = () => { $('onboard').hidden = true; store.set('ff-onboarded', true); };
   $('ob-next').onclick = () => (i === steps.length - 1 ? done() : (i++, show()));
   $('ob-back').onclick = () => { i = Math.max(0, i - 1); show(); };
   $('ob-skip').onclick = done;
   $('btn-guide').onclick = () => { i = 0; show(); $('onboard').hidden = false; };
-  if (!store.get('ff-onboarded', false) && !params.has('nointro') && !params.has('open') && !params.has('preset')) { show(); $('onboard').hidden = false; }
+  if (!store.get('ff-onboarded', false) && !params.has('nointro') && !params.has('open')) { show(); $('onboard').hidden = false; }
 }
 
 // ---------- society search ----------

@@ -16,6 +16,9 @@
     <button id="btn-replay" title="Replay the intro">Replay</button>
     <button id="btn-tour" title="Fly through the matches">Tour</button>
     <button id="btn-theme" title="Light or dark" aria-label="Switch light or dark"></button>
+    <button id="btn-commute" title="Show societies within commute distance">Commute</button>
+    <button id="btn-compare" title="Compare selected societies">Compare</button>
+    <button id="btn-heatmap" title="Toggle price heatmap">Heatmap</button>
     <button id="btn-log" title="Show or hide the right panel">Research log</button>
     <button id="btn-hide" title="Hide panels for recording">Hide panels</button>
     <button id="btn-mhide" class="mobile-only" title="Show or hide the panel">Hide panel</button>
@@ -93,7 +96,7 @@
     </div>
     <div class="k row">Results <select id="f-sort" aria-label="Sort results">
       <option value="best">Best match</option><option value="score">Flat Finder score</option><option value="rating">Resident rating</option>
-      <option value="price">Price, low to high</option><option value="listings">Most listings</option></select></div>
+      <option value="price">Price, low to high</option><option value="listings">Most listings</option><option value="distance">Nearest to pin</option></select></div>
     <div id="results"></div>
 
     <div class="downloads">
@@ -151,6 +154,34 @@
       <div class="fine" id="paste-result"></div>
       <div class="row-between"><button class="linkbtn" id="paste-clear">Clear my list</button><span class="row-gap"><button class="ghost" id="paste-cancel">Close</button><button class="primary" id="paste-add">Add to my list</button></span></div>
     </div>
+  </div>
+
+  <!-- Commute radius panel -->
+  <div class="commute-panel" id="commute-panel" hidden>
+    <div class="k row">Commute from <button class="iconbtn" id="commute-close" aria-label="Close">×</button></div>
+    <div class="commute-pin-hint" id="commute-hint">Click anywhere on the map to set your workplace</div>
+    <div id="commute-controls" hidden>
+      <div class="commute-place" id="commute-place"></div>
+      <div class="k row"><span>Radius</span><span class="val" id="commute-val">5 km</span></div>
+      <input type="range" id="commute-range" min="1" max="20" step="0.5" value="5">
+      <div class="commute-stats" id="commute-stats"></div>
+      <button class="linkbtn" id="commute-clear">Clear pin</button>
+    </div>
+  </div>
+
+  <!-- Compare panel -->
+  <div class="modal" id="compare-modal" hidden>
+    <div class="compare-sheet">
+      <div class="k row">Compare societies <button class="iconbtn" id="compare-close" aria-label="Close">×</button></div>
+      <div id="compare-body"></div>
+    </div>
+  </div>
+
+  <!-- Heatmap legend -->
+  <div class="heatmap-legend" id="heatmap-legend" hidden>
+    <div class="k">Price per sq ft</div>
+    <div class="heatmap-bar"></div>
+    <div class="heatmap-labels"><span id="hm-lo"></span><span id="hm-hi"></span></div>
   </div>
 
   <div class="toast" id="toast" hidden></div>

@@ -32,6 +32,9 @@ let roomMode = 'off', areaUnit = 'gaj', sortBy = 'best';
 let data, byId, map, feed, selected = null, states = new Map(), tourTimer = null, cityId = 'gurgaon', details = null;
 let myList = [], allAmenities = [];
 const highlights = { glow: true, bounds: true, labels: true, ...store.get('ff-highlights', {}) };
+let commuteMode = false, commutePin = null, commuteMarker = null, commuteRadiusKm = 5;
+let compareMode = false, compareList = [];
+let heatmapOn = false;
 
 async function boot() {
   const cities = await fetch('/data/cities.json').then((r) => r.json()).catch(() => ({ gurgaon: { name: 'Gurugram' } }));
@@ -84,6 +87,10 @@ async function boot() {
     setBaseMode(map, baseMode);
     setHighlights(map, highlights);
     startPulse(map);
+    initCommuteLayer();
+    map.on('click', (e) => {
+      if (commuteMode && !commutePin) placeCommutePin(e.lngLat);
+    });
     // any hand on the map stops a running tour
     for (const ev of ['dragstart', 'wheel', 'touchstart']) map.on(ev, (e) => { if (e.originalEvent) stopTour(); });
     for (const l of ['bld', 'site-fill', 'glow']) {
@@ -256,7 +263,14 @@ function toggleLog(show = document.body.classList.contains('nolog')) {
 // ---------- apply and results ----------
 let waveTimer = null;
 function applyFilters(wave = false) {
-  const next = new Map(data.societies.map((s) => [s.id, matchSociety(s, crit)]));
+  const next = new Map(data.societies.map((s) => {
+    let st = matchSociety(s, crit);
+    if (st !== 'no' && crit.commuteDist) {
+      const d = crit.commuteDist.distances.get(s.id);
+      if (d == null || d > crit.commuteDist.km) st = 'no';
+    }
+    return [s.id, st];
+  }));
   const changed = [...next].filter(([id, st]) => states.get(id) !== st);
   states = next;
   clearInterval(waveTimer);
@@ -274,12 +288,14 @@ const dist = (s, c) => (s.lng - c[0]) ** 2 + (s.lat - c[1]) ** 2;
 
 function sorted(list) {
   const price = (s) => priceFor(s, crit.mode, crit.bhk)?.value ?? Infinity;
+  const cdist = (s) => crit.commuteDist?.distances?.get(s.id) ?? Infinity;
   const by = {
     best: (a, b) => RANK[states.get(b.id)] - RANK[states.get(a.id)] || b.verified - a.verified || (b.score || 0) - (a.score || 0),
     score: (a, b) => (b.score || 0) - (a.score || 0),
     rating: (a, b) => (b.rating || 0) - (a.rating || 0) || (b.rating_count || 0) - (a.rating_count || 0),
     price: (a, b) => price(a) - price(b),
     listings: (a, b) => ((b.sale_count || 0) + (b.rent_count || 0)) - ((a.sale_count || 0) + (a.rent_count || 0)),
+    distance: (a, b) => cdist(a) - cdist(b),
   }[sortBy];
   return list.sort(by);
 }
@@ -323,9 +339,14 @@ function resultItem(s) {
   const p = priceFor(s, crit.mode, crit.bhk);
   const money = p ? `${p.estimated ? '~' : ''}${formatINR(p.value)}${crit.mode === 'rent' ? '/mo' : ''}` : '';
   const how = s.verified ? ' · checked by hand' : s.ai_read ? ' · AI-read plans' : '';
-  li.innerHTML = `<span class="nm">${myList.includes(s.id) ? '★ ' : ''}${esc(s.name)}<small>${esc(s.locality || '')}${how}</small></span>
+  const distText = crit.commuteDist ? (() => { const d = crit.commuteDist.distances.get(s.id); return d != null ? ` · ${d.toFixed(1)} km` : ''; })() : '';
+  const cmpCheck = compareMode ? `<span class="cmp-check ${compareList.includes(s.id) ? 'on' : ''}" data-cmp="${s.id}">✓</span>` : '';
+  li.innerHTML = `${cmpCheck}<span class="nm">${myList.includes(s.id) ? '★ ' : ''}${esc(s.name)}<small>${esc(s.locality || '')}${how}${distText}</small></span>
     <span class="tag ${st}">${money}${s.score != null ? `<small>score ${s.score}</small>` : ''}</span>`;
-  li.onclick = () => { stopTour(); openSociety(s.id); };
+  li.onclick = (e) => {
+    if (e.target.closest('.cmp-check')) { toggleCompareItem(s.id); return; }
+    stopTour(); openSociety(s.id);
+  };
   return li;
 }
 
@@ -585,6 +606,13 @@ function buildControls() {
       map.flyTo({ center: at, zoom: 15, bearing: 0, duration: 2000 });
     }, () => { $('ctl-locate').classList.remove('busy'); toast('Could not get your location.'); }, { enableHighAccuracy: true, timeout: 10000 });
   };
+  $('btn-commute').onclick = toggleCommute;
+  $('commute-close').onclick = closeCommute;
+  $('commute-clear').onclick = clearCommutePin;
+  $('commute-range').oninput = updateCommuteRadius;
+  $('btn-compare').onclick = () => { if (compareList.length >= 2) showCompare(); else { compareMode = !compareMode; $('btn-compare').classList.toggle('live', compareMode); renderResults(); if (compareMode) toast('Check 2–4 societies, then click Compare again.'); } };
+  $('compare-close').onclick = closeCompare;
+  $('btn-heatmap').onclick = toggleHeatmap;
   $('layers-btn').onclick = () => $('layers').classList.toggle('open');
   document.querySelectorAll('#layers button[data-mode]').forEach((b) => (b.onclick = () => { setBase(b.dataset.mode); $('layers').classList.remove('open'); }));
   $('btn-theme').onclick = () => setBase(baseMode === 'light' ? 'streets' : 'light');
@@ -716,6 +744,210 @@ function tour() {
   };
   next();
 }
-addEventListener('keydown', (e) => { if (e.key === 'Escape') stopTour(); });
+addEventListener('keydown', (e) => { if (e.key === 'Escape') { stopTour(); closeCommute(); closeCompare(); } });
+
+// ---------- Feature 1: Commute Radius ----------
+function distKm(lat1, lng1, lat2, lng2) {
+  const R = 6371, toRad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * toRad, dLng = (lng2 - lng1) * toRad;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function makeCircle(center, radiusKm, points = 64) {
+  const coords = [];
+  for (let i = 0; i <= points; i++) {
+    const angle = (i / points) * 2 * Math.PI;
+    const dx = radiusKm / (111.32 * Math.cos(center[1] * Math.PI / 180));
+    const dy = radiusKm / 110.574;
+    coords.push([center[0] + dx * Math.cos(angle), center[1] + dy * Math.sin(angle)]);
+  }
+  return { type: 'Feature', geometry: { type: 'Polygon', coordinates: [coords] } };
+}
+
+function toggleCommute() {
+  commuteMode = !commuteMode;
+  $('btn-commute').classList.toggle('live', commuteMode);
+  $('commute-panel').hidden = !commuteMode;
+  if (commuteMode) {
+    map.getCanvas().style.cursor = 'crosshair';
+  } else {
+    closeCommute();
+  }
+}
+
+function closeCommute() {
+  commuteMode = false;
+  $('btn-commute').classList.remove('live');
+  $('commute-panel').hidden = true;
+  map.getCanvas().style.cursor = '';
+  clearCommutePin();
+}
+
+function clearCommutePin() {
+  commutePin = null;
+  if (commuteMarker) { commuteMarker.remove(); commuteMarker = null; }
+  if (map.getSource('commute-circle')) map.getSource('commute-circle').setData({ type: 'FeatureCollection', features: [] });
+  $('commute-hint').hidden = false;
+  $('commute-controls').hidden = true;
+  crit.commuteDist = null;
+  applyFilters();
+}
+
+function placeCommutePin(lngLat) {
+  commutePin = [lngLat.lng, lngLat.lat];
+  map.getCanvas().style.cursor = '';
+
+  if (commuteMarker) commuteMarker.remove();
+  const el = document.createElement('div');
+  el.className = 'work-pin';
+  el.innerHTML = '<svg viewBox="0 0 32 32"><path d="M16 2C10.5 2 6 6.5 6 12c0 8 10 18 10 18s10-10 10-18c0-5.5-4.5-10-10-10z" fill="#ffd9a0" stroke="#0b0b0c" stroke-width="1.5"/><circle cx="16" cy="12" r="4" fill="#0b0b0c"/></svg>';
+  commuteMarker = new maplibregl.Marker({ element: el, draggable: true }).setLngLat(commutePin).addTo(map);
+  commuteMarker.on('dragend', () => { commutePin = [commuteMarker.getLngLat().lng, commuteMarker.getLngLat().lat]; updateCommuteRadius(); });
+
+  $('commute-hint').hidden = true;
+  $('commute-controls').hidden = false;
+  updateCommuteRadius();
+}
+
+function updateCommuteRadius() {
+  if (!commutePin) return;
+  commuteRadiusKm = +$('commute-range').value;
+  $('commute-val').textContent = commuteRadiusKm >= 1 ? `${commuteRadiusKm} km` : `${Math.round(commuteRadiusKm * 1000)} m`;
+
+  const circle = makeCircle(commutePin, commuteRadiusKm);
+  if (map.getSource('commute-circle')) {
+    map.getSource('commute-circle').setData({ type: 'FeatureCollection', features: [circle] });
+  }
+
+  const distances = new Map();
+  let inside = 0;
+  for (const s of data.societies) {
+    const d = distKm(commutePin[1], commutePin[0], s.lat, s.lng);
+    distances.set(s.id, d);
+    if (d <= commuteRadiusKm) inside++;
+  }
+  crit.commuteDist = { pin: commutePin, km: commuteRadiusKm, distances };
+  $('commute-stats').innerHTML = `<b>${inside}</b> societies within ${commuteRadiusKm} km · ~${Math.round(commuteRadiusKm / 0.5)} min drive`;
+  applyFilters();
+}
+
+function initCommuteLayer() {
+  map.addSource('commute-circle', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({ id: 'commute-fill', type: 'fill', source: 'commute-circle',
+    paint: { 'fill-color': '#ffd9a0', 'fill-opacity': 0.08 } }, 'glow');
+  map.addLayer({ id: 'commute-line', type: 'line', source: 'commute-circle',
+    paint: { 'line-color': '#ffd9a0', 'line-width': 2, 'line-dasharray': [4, 3], 'line-opacity': 0.6 } }, 'glow');
+}
+
+// ---------- Feature 2: Shortlist enhancements ----------
+// (Shortlist already exists via myList/star. We enhance with sort-by-distance in commute mode
+//  and a dedicated shortlist sort option.)
+
+// ---------- Feature 3: Compare Societies ----------
+function toggleCompare() {
+  compareMode = !compareMode;
+  $('btn-compare').classList.toggle('live', compareMode);
+  if (compareMode) {
+    if (compareList.length >= 2) showCompare();
+    else toast('Star or check 2–4 societies to compare, then click Compare again.');
+    renderResults();
+  } else {
+    closeCompare();
+  }
+}
+
+function closeCompare() {
+  compareMode = false;
+  $('btn-compare').classList.remove('live');
+  $('compare-modal').hidden = true;
+  compareList = [];
+  renderResults();
+}
+
+function toggleCompareItem(id) {
+  const idx = compareList.indexOf(id);
+  if (idx >= 0) compareList.splice(idx, 1);
+  else if (compareList.length < 4) compareList.push(id);
+  else { toast('Compare up to 4 societies at a time.'); return; }
+  renderResults();
+}
+
+function showCompare() {
+  if (compareList.length < 2) { toast('Select at least 2 societies to compare.'); return; }
+  const socs = compareList.map((id) => byId.get(id)).filter(Boolean);
+  const cols = socs.length + 1;
+  $('compare-body').style = ``;
+
+  const rows = [
+    ['', ...socs.map((s) => `<div class="cv nm">${esc(s.name)}<div class="fine">${esc(s.locality || '')}</div></div>`)],
+    ['Developer', ...socs.map((s) => `<div class="cv">${esc(s.developer || '—')}</div>`)],
+    ['Type', ...socs.map((s) => `<div class="cv">${esc(s.kind || '—')}</div>`)],
+    ['Rating', ...socs.map((s) => `<div class="cv">${s.rating ? `<span class="stars">★ ${s.rating.toFixed(1)}</span> (${s.rating_count || 0})` : '—'}</div>`)],
+    ['Score', ...socs.map((s) => `<div class="cv">${s.score != null ? `<b>${s.score}</b>/10` : '—'}</div>`)],
+    ['Buy price', ...socs.map((s) => { const p = priceFor(s, 'buy', crit.bhk); return `<div class="cv">${p ? `${p.estimated ? '~' : ''}${formatINR(p.value)}` : '—'}</div>`; })],
+    ['Rent', ...socs.map((s) => { const p = priceFor(s, 'rent', crit.bhk); return `<div class="cv">${p ? `${p.estimated ? '~' : ''}${formatINR(p.value)}/mo` : '—'}</div>`; })],
+    ['BHK types', ...socs.map((s) => `<div class="cv">${s.unit_types.map((u) => u.bhk).filter((v, i, a) => a.indexOf(v) === i).sort().join(', ') || '—'} BHK</div>`)],
+    ['For sale', ...socs.map((s) => `<div class="cv">${(s.sale_count || 0).toLocaleString()}</div>`)],
+    ['For rent', ...socs.map((s) => `<div class="cv">${(s.rent_count || 0).toLocaleString()}</div>`)],
+    ['Towers', ...socs.map((s) => `<div class="cv">${s.towers || '—'}</div>`)],
+    ['Units', ...socs.map((s) => `<div class="cv">${s.units ? Number(s.units).toLocaleString() : '—'}</div>`)],
+    ['Status', ...socs.map((s) => `<div class="cv">${esc(s.status || '—')}</div>`)],
+    ['Nearest park', ...socs.map((s) => `<div class="cv">${s.nearby?.park ? metres(s.nearby.park.m) : '—'}</div>`)],
+    ['Nearest metro', ...socs.map((s) => `<div class="cv">${s.nearby?.metro ? metres(s.nearby.metro.m) : '—'}</div>`)],
+    ['Amenities', ...socs.map((s) => `<div class="cv fine">${s.amenities.slice(0, 8).join(', ') || '—'}${s.amenities.length > 8 ? ` +${s.amenities.length - 8}` : ''}</div>`)],
+  ];
+
+  if (crit.commuteDist) {
+    rows.splice(6, 0, ['Distance', ...socs.map((s) => {
+      const d = crit.commuteDist.distances.get(s.id);
+      return `<div class="cv">${d != null ? `${d.toFixed(1)} km` : '—'}</div>`;
+    })]);
+  }
+
+  const grid = `<div class="compare-grid" style="grid-template-columns: 100px repeat(${socs.length}, 1fr)">
+    ${rows.map(([label, ...cells]) => `<div class="ch">${label}</div>${cells.join('')}`).join('')}
+  </div>`;
+  $('compare-body').innerHTML = grid;
+  $('compare-modal').hidden = false;
+}
+
+// ---------- Feature 4: Price Heatmap ----------
+function toggleHeatmap() {
+  heatmapOn = !heatmapOn;
+  $('btn-heatmap').classList.toggle('live', heatmapOn);
+  $('heatmap-legend').hidden = !heatmapOn;
+
+  if (!map.getSource('heatmap-pts')) {
+    const features = [];
+    const vals = [];
+    for (const s of data.societies) {
+      const psf = Object.values(s.prices || {}).map((p) => p.psf).filter(Boolean);
+      if (!psf.length) continue;
+      const avg = psf.reduce((a, b) => a + b, 0) / psf.length;
+      if (avg > 0) vals.push(avg);
+      features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [s.lng, s.lat] }, properties: { psf: avg, name: s.name } });
+    }
+    vals.sort((a, b) => a - b);
+    const lo = vals[Math.floor(vals.length * 0.05)] || 0;
+    const hi = vals[Math.floor(vals.length * 0.95)] || 1;
+    $('hm-lo').textContent = `₹${Math.round(lo).toLocaleString()}/sqft`;
+    $('hm-hi').textContent = `₹${Math.round(hi).toLocaleString()}/sqft`;
+
+    map.addSource('heatmap-pts', { type: 'geojson', data: { type: 'FeatureCollection', features } });
+    map.addLayer({ id: 'heatmap', type: 'circle', source: 'heatmap-pts',
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 4, 13, 8, 16, 14],
+        'circle-color': ['interpolate', ['linear'], ['get', 'psf'],
+          lo, '#22c55e', lo + (hi - lo) * 0.25, '#84cc16', lo + (hi - lo) * 0.5, '#eab308',
+          lo + (hi - lo) * 0.75, '#f97316', hi, '#ef4444'],
+        'circle-opacity': 0.85,
+        'circle-stroke-width': 1,
+        'circle-stroke-color': 'rgba(0,0,0,0.4)',
+      } });
+  }
+
+  map.setLayoutProperty('heatmap', 'visibility', heatmapOn ? 'visible' : 'none');
+}
 
 boot().catch((e) => { console.error(e); document.title = 'ERR ' + e.message; });

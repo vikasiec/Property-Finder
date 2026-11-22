@@ -506,13 +506,25 @@ def main(city="gurgaon", max_projects=0):
         noise_features = json.loads(noise_src.read_text(encoding="utf-8")).get("features") or []
     similar = society_scores.attach(
         societies, city, {s["id"]: s.get("trend") for s in societies if s.get("trend")}, noise_features)
+    rain_src = out / "rainfall.json"
+    if rain_src.exists():
+        import rain_fetch
+        rain_fetch.add_rainfall(societies, json.loads(rain_src.read_text(encoding="utf-8")))
+    green_src = out / "greenery.json"
+    if green_src.exists():
+        greenery = json.loads(green_src.read_text(encoding="utf-8")).get("societies") or {}
+        for society in societies:
+            row = greenery.get(society.get("id"))
+            if row:
+                society["green_score"] = row["score"]
+                society["green_label"] = row["label"]
 
     WEB.mkdir(parents=True, exist_ok=True)
     overlays = []
     if pois:
         (WEB / f"{city}-pois.json").write_text(json.dumps(pois, separators=(",", ":")))
         overlays.append("pois")
-    for key, fname in (("transit", "transit.geojson"), ("waterways", "waterways.geojson"), ("aqi", "aqi.json"), ("noise", "noise.geojson")):
+    for key, fname in (("transit", "transit.geojson"), ("waterways", "waterways.geojson"), ("aqi", "aqi.json"), ("noise", "noise.geojson"), ("rainfall", "rainfall.json"), ("green", "green.geojson")):
         src = out / fname
         if src.exists():
             shutil.copy(src, WEB / f"{city}-{fname}")

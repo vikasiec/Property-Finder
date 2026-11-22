@@ -373,6 +373,16 @@ body.has-card .maplibregl-ctrl-bottom-right { right: calc(var(--right-w) + var(-
 .trend-chart { width: 100%; height: auto; display: block; }
 .commute-info { font-size: 12px; color: var(--muted); }
 .liquidity-row, .builder-stats, .safety-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.rain-section { margin: 8px 0; }
+.rain-chart { display: flex; align-items: flex-end; gap: 3px; height: 64px; }
+.rain-bar { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; gap: 2px; }
+.rain-bar i { display: block; width: 100%; border-radius: 2px 2px 0 0; min-height: 2px; }
+.rain-bar span { font-size: 8px; color: var(--muted); }
+.signal { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+.green-lush { background: #15803d; color: #fff; }
+.green-mod { background: #84cc16; color: #1a1a1a; }
+.green-sparse { background: #fbbf24; color: #1a1a1a; }
+.green-concrete { background: #94a3b8; color: #1a1a1a; }
 
 @media (max-width: 700px) {
   .layers.open .layer-menu {

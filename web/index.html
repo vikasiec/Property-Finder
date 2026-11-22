@@ -98,7 +98,9 @@
       <option value="price">Price, low to high</option><option value="listings">Most listings</option><option value="distance">Nearest to pin</option><option value="station">Nearest to station</option>
       <option value="liquidity">Resale liquidity</option><option value="builder">Builder track record</option>
       <option value="trend-up">Price trend, fastest rising</option><option value="trend-stable">Price trend, most stable</option>
-      <option value="commute">Shortest drive</option></select>
+      <option value="commute">Shortest drive</option>
+      <option value="rain-low">Least rainfall</option>
+      <option value="greenery">Greenest first</option></select>
       <button class="linkbtn" id="btn-copyurl" title="Copy a link to these filters">Copy link</button></div>
     <div id="results"></div>
 
@@ -139,12 +141,15 @@
           <label class="sw"><input type="radio" name="colorby" value="liquidity"> Resale liquidity</label>
           <label class="sw"><input type="radio" name="colorby" value="safety"> Safety score</label>
           <label class="sw"><input type="radio" name="colorby" value="noise"> Noise</label>
+          <label class="sw"><input type="radio" name="colorby" value="greenery"> Greenery</label>
           <div class="k" style="font-size:11px;margin-top:8px;margin-bottom:2px">Overlays</div>
           <label class="sw"><input type="checkbox" id="dl-metro"> Metro routes</label>
           <label class="sw"><input type="checkbox" id="dl-schools"> Schools</label>
           <label class="sw"><input type="checkbox" id="dl-flood"> Rivers</label>
           <label class="sw"><input type="checkbox" id="dl-aqi"> Air quality</label>
           <label class="sw"><input type="checkbox" id="dl-noise"> Noise zones</label>
+          <label class="sw"><input type="checkbox" id="dl-rain"> Rainfall</label>
+          <label class="sw"><input type="checkbox" id="dl-green"> Green spaces</label>
         </div>
       </div>
       <button id="layers-btn" class="layers-btn" title="Map style" aria-label="Map style"><svg viewBox="0 0 24 24" width="16" height="16"><path d="m12 3 9 5-9 5-9-5z M3 13l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></button>

@@ -89,10 +89,11 @@ function readFiltersFromUrl() {
     const kinds = p.get('kind').split(',').filter(Boolean);
     if (kinds.length) crit.kinds = kinds;
   }
-  const sorts = ['best', 'score', 'rating', 'price', 'listings', 'distance', 'station', 'liquidity', 'builder', 'trend-up', 'trend-stable', 'commute'];
+  const sorts = ['best', 'score', 'rating', 'price', 'listings', 'distance', 'station', 'liquidity', 'builder', 'trend-up', 'trend-stable', 'commute', 'rain-low', 'greenery'];
   if (sorts.includes(p.get('sort'))) sortBy = p.get('sort');
-  const colours = ['off', 'price', 'yield', 'walkscore', 'supply', 'liquidity', 'safety', 'noise'];
+  const colours = ['off', 'price', 'yield', 'walkscore', 'supply', 'liquidity', 'safety', 'noise', 'greenery'];
   if (colours.includes(p.get('colorby'))) colorByMode = p.get('colorby');
+  wantGreen = p.get('green') === '1';
 }
 
 function syncUrlFromFilters() {
@@ -117,6 +118,7 @@ function syncUrlFromFilters() {
   if (!(crit.kinds.length === 1 && crit.kinds[0] === 'apartment')) p.set('kind', crit.kinds.join(','));
   if (sortBy !== 'best') p.set('sort', sortBy);
   if (colorByMode !== 'off') p.set('colorby', colorByMode);
+  if ($('dl-green')?.checked) p.set('green', '1');
   if (baseMode !== 'streets') p.set('map', baseMode);
   if (selected) p.set('open', selected);
   const next = `${location.pathname}?${p.toString()}`;
@@ -126,6 +128,7 @@ let data, byId, map, feed, selected = null, states = new Map(), tourTimer = null
 let myList = [], allAmenities = [];
 const highlights = { glow: true, bounds: true, labels: true, ...store.get('ff-highlights', {}) };
 let commuteMode = false, commutePin = null, commuteMarker = null, commuteRadiusKm = 5, commuteTimeMode = 'radius';
+let wantGreen = false;
 let driveCache = new Map();
 let metroSearchMode = false, transitGj = null, metroLineName = '', metroRadiusM = 1000, metroSortWas = null;
 const metroLineCache = new Map();
@@ -198,6 +201,7 @@ async function boot() {
     initMetroSearchLayer();
     initIsochroneLayer();
     if (colorByMode !== 'off') setColorBy(colorByMode);
+    if (wantGreen && $('dl-green')) { $('dl-green').checked = true; toggleGreen(); }
     map.on('click', (e) => {
       if (commuteMode && !commutePin) placeCommutePin(e.lngLat);
     });
@@ -418,6 +422,8 @@ function sorted(list) {
     'trend-up': (a, b) => (b.trend_pct ?? -999) - (a.trend_pct ?? -999),
     'trend-stable': (a, b) => Math.abs(a.trend_pct ?? 999) - Math.abs(b.trend_pct ?? 999),
     commute: (a, b) => (crit.commuteTime?.minutes.get(a.id) ?? 9999) - (crit.commuteTime?.minutes.get(b.id) ?? 9999),
+    'rain-low': (a, b) => (a.rain_annual ?? 9999) - (b.rain_annual ?? 9999),
+    greenery: (a, b) => (b.green_score ?? -1) - (a.green_score ?? -1),
   }[sortBy];
   return list.sort(by);
 }
@@ -574,6 +580,7 @@ function renderCard(s) {
     <h4>Bedrooms</h4>
     ${unitRows ? `<table><tr><th>Unit</th><th>Bedrooms</th><th></th><th>Source</th></tr>${unitRows}</table>` : '<div class="fine">No unit types listed.</div>'}
     ${nearRows ? `<h4>Nearby</h4><div class="near">${nearRows}</div>` : ''}
+    ${rainfallChart(s)}
     ${ratingBars ? `<h4>What residents rate</h4>${ratingBars}` : ''}${reviews}
     ${facts || amen ? `<h4>Amenities (${s.amenities.length})</h4><div class="amen">${facts}${amen}</div>` : ''}
     ${about}
@@ -642,6 +649,10 @@ function signalRows(s) {
   if (s.safety_score != null) {
     const level = s.safety_score > 70 ? 'good' : s.safety_score >= 40 ? 'moderate' : 'concern';
     bits.push(`<div class="safety-row"><span class="safety-badge safety-${level}">${s.safety_score}/100</span><span class="fine" title="Ward-level reported crime, not a guarantee of personal safety.">Safety · ${esc(s.safety_zone || 'nearest station')}</span></div>`);
+  }
+  if (s.green_score != null) {
+    const cls = s.green_score >= 75 ? 'green-lush' : s.green_score >= 50 ? 'green-mod' : s.green_score >= 25 ? 'green-sparse' : 'green-concrete';
+    bits.push(`<span class="signal ${cls}" title="Share of mapped parks, woods, and grass within 500 m. Untagged trees are not included.">${esc(s.green_label || 'Green')} · ${s.green_score}</span>`);
   }
   if ((s.noise_score || 0) > 50) {
     bits.push(`<div class="noise-warn">Noise zone: near a ${esc(s.noise_source || 'busy corridor')}</div>`);
@@ -835,6 +846,8 @@ function buildControls() {
   };
   document.querySelectorAll('#commute-mode-seg button').forEach((b) => { b.onclick = () => setCommuteTimeMode(b.dataset.cm); });
   $('dl-noise').onchange = () => toggleNoise();
+  $('dl-rain').onchange = () => toggleRain();
+  $('dl-green').onchange = () => { toggleGreen(); syncUrlFromFilters(); };
   $('btn-compare').onclick = () => { if (compareList.length >= 2) showCompare(); else { compareMode = !compareMode; $('btn-compare').classList.toggle('live', compareMode); renderResults(); if (compareMode) toast('Check 2–4 societies, then click Compare again.'); } };
   $('compare-close').onclick = closeCompare;
   document.querySelectorAll('input[name="colorby"]').forEach((r) => { r.onchange = () => setColorBy(r.value); });
@@ -1538,6 +1551,7 @@ function initColorBy() {
     if (s.liquidity_score != null) properties.liquidity_score = s.liquidity_score;
     if (s.safety_score != null) properties.safety_score = s.safety_score;
     if (s.noise_score != null) properties.noise_score = s.noise_score;
+    if (s.green_score != null) properties.green_score = s.green_score;
     features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [s.lng, s.lat] }, properties });
   }
   map.addSource('colorby-pts', { type: 'geojson', data: { type: 'FeatureCollection', features } });
@@ -1625,6 +1639,29 @@ function setColorBy(mode) {
       ['step', ['get', 'safety_score'], '#ef4444', 40, '#eab308', 71, '#22c55e'],
       '#94a3b8']);
     map.setPaintProperty('colorby', 'circle-opacity', ['case', ['has', 'safety_score'], 0.9, 0.82]);
+  } else if (mode === 'greenery') {
+    const has = data.societies.some((s) => s.green_score != null);
+    if (!has) {
+      map.setLayoutProperty('colorby', 'visibility', 'none');
+      legend.hidden = true;
+      colorByMode = 'off';
+      const off = document.querySelector('input[name="colorby"][value="off"]');
+      if (off) off.checked = true;
+      toast('No greenery scores for this city yet.');
+      syncUrlFromFilters();
+      return;
+    }
+    map.setFilter('colorby', ['has', 'green_score']);
+    map.setPaintProperty('colorby', 'circle-color', ['interpolate', ['linear'], ['coalesce', ['get', 'green_score'], 0],
+      0, '#94a3b8', 25, '#fbbf24', 50, '#84cc16', 75, '#22c55e', 100, '#15803d']);
+    map.setPaintProperty('colorby', 'circle-opacity', 0.85);
+    $('ll-title').textContent = 'Greenery';
+    $('ll-dots').innerHTML = '';
+    $('ll-lo').textContent = 'Concrete';
+    $('ll-hi').textContent = 'Lush';
+    document.querySelector('.ll-bar').style.background = 'linear-gradient(90deg, #94a3b8, #fbbf24, #84cc16, #22c55e, #15803d)';
+    document.querySelector('.ll-bar').style.display = '';
+    document.querySelector('.ll-labels').style.display = '';
   } else if (mode === 'liquidity' || mode === 'noise') {
     const field = mode === 'liquidity' ? 'liquidity_score' : 'noise_score';
     const has = data.societies.some((s) => s[field] != null);
@@ -1777,6 +1814,74 @@ function toggleAqi() {
     return;
   }
   showOverlay(['aqi-circles', 'aqi-labels'], aqiOn);
+}
+
+const RAIN_MONTHS = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
+const RAIN_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function rainfallChart(s) {
+  const monthly = s.rain_monthly;
+  if (!monthly || monthly.length !== 12) return '';
+  const max = Math.max(...monthly) || 1;
+  const bars = monthly.map((mm, i) => {
+    const h = Math.max(2, Math.round((mm / max) * 48));
+    const color = i >= 5 && i <= 8 ? '#3b82f6' : '#93c5fd';
+    return `<div class="rain-bar" title="${RAIN_NAMES[i]}: ${mm} mm"><i style="height:${h}px;background:${color}"></i><span>${RAIN_MONTHS[i]}</span></div>`;
+  }).join('');
+  const years = s.rain_yearly || [];
+  const trend = years.length >= 2 ? `<div class="fine">${years[0].year}: ${years[0].mm} mm · ${years[years.length - 1].year}: ${years[years.length - 1].mm} mm</div>` : '';
+  return `<div class="rain-section"><div class="k">Rainfall · ${s.rain_annual} mm/year · ${s.rain_monsoon_pct}% in monsoon (Jun–Sep)</div><div class="rain-chart">${bars}</div>${trend}<div class="fine">Open-Meteo 2019–2024 for this locality. Not a flood map.</div></div>`;
+}
+
+let rainOn = false;
+function toggleRain() {
+  rainOn = $('dl-rain').checked;
+  if (!layersReady()) { rainOn = false; $('dl-rain').checked = false; toast('Map is still loading.'); return; }
+  const ids = ['rain-circles', 'rain-labels'];
+  if (rainOn && !map.getSource('rain-data')) {
+    loadJson(`/data/${cityId}-rainfall.json`).then((rain) => {
+      const features = Object.entries(rain.localities || {}).map(([name, loc]) => ({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [loc.lng, loc.lat] },
+        properties: { name, annual: loc.annual_avg, monsoon_pct: loc.monsoon_pct },
+      }));
+      map.addSource('rain-data', { type: 'geojson', data: { type: 'FeatureCollection', features } });
+      map.addLayer({ id: 'rain-circles', type: 'circle', source: 'rain-data',
+        paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 12, 14, 24],
+          'circle-color': ['interpolate', ['linear'], ['get', 'annual'], 400, '#93c5fd', 700, '#3b82f6', 1000, '#6366f1', 1500, '#7c3aed'],
+          'circle-opacity': 0.5,
+          'circle-stroke-width': 1,
+          'circle-stroke-color': '#fff',
+          'circle-stroke-opacity': 0.3,
+        } }, 'labels');
+      map.addLayer({ id: 'rain-labels', type: 'symbol', source: 'rain-data',
+        layout: { 'text-field': ['concat', ['to-string', ['round', ['get', 'annual']]], ' mm'], 'text-size': 10, 'text-font': LABEL_FONT },
+        paint: { 'text-color': '#e0e7ff', 'text-halo-color': '#0b0b0c', 'text-halo-width': 1.5 } }, 'labels');
+      if (!rainOn) showOverlay(ids, false);
+    }).catch(() => { rainOn = false; $('dl-rain').checked = false; toast('No rainfall data for this city.'); });
+    return;
+  }
+  showOverlay(ids, rainOn);
+}
+
+let greenOn = false;
+function toggleGreen() {
+  greenOn = $('dl-green').checked;
+  if (!layersReady()) { greenOn = false; $('dl-green').checked = false; toast('Map is still loading.'); return; }
+  const ids = ['green-fill', 'green-line'];
+  if (greenOn && !map.getSource('green-data')) {
+    loadJson(`/data/${cityId}-green.geojson`).then((gj) => {
+      map.addSource('green-data', { type: 'geojson', data: gj });
+      map.addLayer({ id: 'green-fill', type: 'fill', source: 'green-data',
+        paint: { 'fill-color': '#22c55e', 'fill-opacity': 0.2 } }, 'labels');
+      map.addLayer({ id: 'green-line', type: 'line', source: 'green-data',
+        paint: { 'line-color': '#22c55e', 'line-width': 1, 'line-opacity': 0.5 } }, 'labels');
+      if (!greenOn) showOverlay(ids, false);
+    }).catch(() => { greenOn = false; $('dl-green').checked = false; toast('No green-space data for this city.'); });
+    return;
+  }
+  showOverlay(ids, greenOn);
 }
 
 let noiseOn = false;

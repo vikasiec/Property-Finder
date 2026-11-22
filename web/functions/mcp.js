@@ -6,9 +6,11 @@ import { searchSocieties } from '../src/search.js';
 const PROTOCOL = '2025-06-18';
 const SITE = 'https://flat-finder.pages.dev';
 const cache = new Map();
+const MAX_CACHED_CITIES = 3;
 
 async function city(env, origin, id) {
   if (!cache.has(id)) {
+    if (cache.size >= MAX_CACHED_CITIES) cache.delete(cache.keys().next().value);
     const res = await env.ASSETS.fetch(new Request(`${origin}/data/${id}.json`));
     if (!res.ok) throw new Error(`Unknown city "${id}"`);
     cache.set(id, await res.json());
@@ -197,6 +199,7 @@ function groupKeys(s, by, crit) {
 let detailsCache = null;
 async function details(env, origin, id, sid) {
   if (!detailsCache || detailsCache.id !== id) {
+    if (detailsCache) detailsCache.data = null;
     const res = await env.ASSETS.fetch(new Request(`${origin}/data/${id}-details.json`));
     detailsCache = { id, data: res.ok ? await res.json() : {} };
   }
@@ -284,6 +287,7 @@ async function callTool(name, args, env, origin) {
   throw new Error(`Unknown tool ${name}`);
 }
 
+// CORS wildcard is intentional: MCP connectors (Claude, etc.) need cross-origin access; this endpoint is read-only public data.
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' } });
 
 export async function onRequest({ request, env }) {

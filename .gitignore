@@ -1,6 +1,6 @@
 pipeline/cache/
 pipeline/cache_*.log
-pipeline/out/*/osm_buildings.geojson
+pipeline/out/
 node_modules/
 web/dist/
 .DS_Store
@@ -8,5 +8,14 @@ __pycache__/
 .pytest_cache/
 .gstack/
 
-pipeline/cache_*.log
 data/verified/*-ai.json.bak
+
+# Large generated web data (rebuild with build_city.py)
+web/public/data/*.json
+web/public/data/*.csv
+web/public/data/*.geojson
+!web/public/data/cities.json
+
+# Local artifacts
+pipeline/crawl_pune.log
+MAP_ENRICHMENT_PLAN.md

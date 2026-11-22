@@ -10,6 +10,7 @@ import sys
 from collections import defaultdict
 
 import csv
+import shutil
 import statistics
 import urllib.parse
 
@@ -115,15 +116,30 @@ def match_area(project, area_grid):
 
 def dedupe(projects):
     """Merge listings with the same name tokens less than 400 m apart (phases, duplicates)."""
+    grid = defaultdict(list)
     kept = []
     for p in projects:
-        for q in kept:
-            if tokens(p["name"]) == tokens(q["name"]) and tokens(p["name"]) and \
-                    geo.dist_m((p["lng"], p["lat"]), (q["lng"], q["lat"])) < 400:
-                q.setdefault("merged", []).append(p["url"])
-                break
-        else:
+        pt = p["name"]
+        toks = tokens(pt)
+        if not toks:
             kept.append(p)
+            continue
+        cx, cy = int(p["lng"] * 100), int(p["lat"] * 100)
+        merged = False
+        for dx in range(-1, 2):
+            for dy in range(-1, 2):
+                for q in grid.get((cx + dx, cy + dy), []):
+                    if toks == tokens(q["name"]) and geo.dist_m((p["lng"], p["lat"]), (q["lng"], q["lat"])) < 400:
+                        q.setdefault("merged", []).append(p["url"])
+                        merged = True
+                        break
+                if merged:
+                    break
+            if merged:
+                break
+        if not merged:
+            kept.append(p)
+            grid[(cx, cy)].append(p)
     return kept
 
 
@@ -159,7 +175,7 @@ def events_for(s):
     ev = []
     sid = s["id"]
     src = s.get("url")
-    ev.append({"sid": sid, "step": "Located on map", "finding": f"{s['locality'] or 'Gurgaon'} · {s['lat']:.4f}, {s['lng']:.4f}", "url": src})
+    ev.append({"sid": sid, "step": "Located on map", "finding": f"{s['locality'] or s.get('_city_name', '')} · {s['lat']:.4f}, {s['lng']:.4f}", "url": src})
     bits = [f"{int(s['towers'])} towers" if s.get("towers") else None, f"{int(s['units']):,} units" if s.get("units") else None,
             f"{s['acres']} acres" if s.get("acres") else None]
     if any(bits):
@@ -222,18 +238,42 @@ def shapes_for(s, area, bld_grid, sid_seed):
     return feats, shape
 
 
-def main(city="gurgaon"):
+def walk_score(nearby):
+    """Weighted 0-100 walkability from POI proximity."""
+    def decay(d, ideal, mx):
+        if d <= ideal:
+            return 1.0
+        if d >= mx:
+            return 0.0
+        return 1.0 - (d - ideal) / (mx - ideal)
+    specs = [("metro", 25, 500, 1500), ("park", 20, 300, 1000), ("school", 15, 500, 1500),
+             ("hospital", 15, 500, 2500), ("shopping", 15, 500, 1500), ("rail", 10, 500, 2500)]
+    return round(sum(w * decay(nearby.get(k, {}).get("m", 9e9), ideal, mx) for k, w, ideal, mx in specs))
+
+
+def main(city="gurgaon", max_projects=0):
     cfg = json.loads((ROOT.parent / "data" / "cities.json").read_text())[city]
     out = OUT / city
     raw = json.loads((out / "mb_projects.json").read_text())
-    located = [p for p in raw if p.get("lat") and p.get("lng") and 28.2 < p["lat"] < 28.7 and 76.7 < p["lng"] < 77.3]
+    bbox = cfg["bbox"]  # [lat_min, lng_min, lat_max, lng_max]
+    located = [p for p in raw if p.get("lat") and p.get("lng") and bbox[0] < p["lat"] < bbox[2] and bbox[1] < p["lng"] < bbox[3]]
     not_located = len(raw) - len(located)
+    if max_projects and len(located) > max_projects:
+        located.sort(key=lambda p: sum(1 for v in (p.get("rating"), p.get("amenities"), p.get("reviews"), p.get("images"), p.get("configs")) if v), reverse=True)
+        located = located[:max_projects]
+        print(f"Capped to top {max_projects} projects by data richness", flush=True)
+    print(f"Located {len(located)}/{len(raw)} projects, deduping...", flush=True)
     projects = dedupe(located)
+    print(f"After dedupe: {len(projects)} societies", flush=True)
     areas = json.loads((out / "osm_areas.geojson").read_text())["features"]
     area_grid = Grid(areas, lambda a: geo.centroid(a["geometry"]["coordinates"][0]))
-    blds = json.loads((out / "osm_buildings.geojson").read_text())["features"]
-    for b in blds:
-        b["_c"] = geo.centroid(b["geometry"]["coordinates"][0])
+    bld_file = out / "osm_buildings.geojson"
+    if bld_file.stat().st_size < 20_000_000:
+        blds = json.loads(bld_file.read_text())["features"]
+        for b in blds:
+            b["_c"] = geo.centroid(b["geometry"]["coordinates"][0])
+    else:
+        blds = []
     bld_grid = Grid(blds, lambda b: b["_c"])
 
     vfile = verified.ROOT / "data" / "verified" / f"{city}.json"
@@ -253,6 +293,7 @@ def main(city="gurgaon"):
              "ratings": p.get("ratings") or {}, "reviews": p.get("reviews") or [], "locality_rating": p.get("locality_rating"),
              "sale_count": p.get("sale_count"), "rent_count": p.get("rent_count"), "psf_now": p.get("psf_now"),
              "trend": p.get("trend") or [], "description": p.get("description"),
+             "_city_name": cfg["name"],
              "gmaps": "https://www.google.com/maps/search/?api=1&query=" + urllib.parse.quote(f"{p['name']}, {p.get('locality') or ''}, {cfg['name']}"),
              "prices": pricing.listing_stats(p)}
         if s["towers"] and s["towers"] > 60:  # portal typo (e.g. 1500 towers): not plausible, drop it
@@ -386,6 +427,7 @@ def main(city="gurgaon"):
             if d <= 1000:
                 near[k]["n"] = near[k].get("n", 0) + 1
         s["nearby"] = near
+        s["walk_score"] = walk_score(near)
 
     # Flat Finder score (0-10): residents' rating, what is nearby, amenities. Shown with its parts.
     for s in societies:
@@ -405,6 +447,26 @@ def main(city="gurgaon"):
     # prices: real listing medians first, then labelled estimates
     model = pricing.fit_yields(societies)
     print("price cells flagged as likely typos:", pricing.flag_outliers(societies))
+    # per-society rental yield (BHK keys are still ints; yield_for looks them up that way)
+    for s in societies:
+        yields = []
+        for bhk, p in s["prices"].items():
+            if p.get("flags") and ("buy" in p["flags"] or "rent" in p["flags"]):
+                continue
+            buy_med = (p.get("buy") or {}).get("median")
+            rent_med = (p.get("rent") or {}).get("median")
+            if buy_med and rent_med:
+                y = rent_med * 12 / buy_med
+                if 0.005 < y < 0.12:
+                    yields.append(y)
+        if yields:
+            s["rental_yield"] = round(statistics.median(yields) * 100, 2)
+            s["yield_src"] = "listings"
+        else:
+            bhk_key = next(iter(s["prices"]), None)
+            y, _ = pricing.yield_for(model, s.get("locality"), bhk_key)
+            s["rental_yield"] = round(y * 100, 2) if y else None
+            s["yield_src"] = "estimated" if y else None
     loc_psf = defaultdict(list)
     for s in societies:
         for b in s["prices"].values():
@@ -421,6 +483,9 @@ def main(city="gurgaon"):
         if s["kind"] in ("apartment", "builder floor", "villa"):
             pricing.add_estimates(s, model, {b: statistics.median(v) for b, v in sizes.items()}, psf)
         s["prices"] = {str(b): v for b, v in sorted(s["prices"].items())}
+        poss = s.get("possession") or ""
+        yr = re.search(r"(20\d{2})", poss)
+        s["possession_year"] = int(yr.group(1)) if yr else None
 
     for i, s in enumerate(societies):
         area = match_area(s, area_grid)
@@ -435,17 +500,30 @@ def main(city="gurgaon"):
         events.extend(events_for(s))
 
     WEB.mkdir(parents=True, exist_ok=True)
+    overlays = []
+    if pois:
+        (WEB / f"{city}-pois.json").write_text(json.dumps(pois, separators=(",", ":")))
+        overlays.append("pois")
+    for key, fname in (("transit", "transit.geojson"), ("waterways", "waterways.geojson"), ("aqi", "aqi.json")):
+        src = out / fname
+        if src.exists():
+            shutil.copy(src, WEB / f"{city}-{fname}")
+            overlays.append(key)
     doc = {"city": {"id": city, "name": cfg["name"], "center": cfg["center"], "zoom": cfg["zoom"]},
+           "overlays": overlays,
             "price_model": model,
             "room_model": room_model,
             "counts": {"listed": len(raw), "on_map": len(societies), "not_located": not_located,
                        "ai_read": sum(1 for s in societies if s.get("ai_read")),
                        "for_sale": sum(s["sale_count"] or 0 for s in societies), "for_rent": sum(s["rent_count"] or 0 for s in societies),
                        "verified": sum(s["verified"] for s in societies)},
-            "sources": ["Magicbricks project pages", "OpenStreetMap contributors", "HRERA Gurugram", "Builder brochures (verified rows)"],
+            "sources": ["Magicbricks project pages", "OpenStreetMap contributors"] +
+                       (["HRERA " + cfg["name"]] if (vdir / f"{city}-hrera.json").exists() else []) +
+                       (["Builder brochures (verified rows)"] if ver else []),
             "societies": societies, "events": events}
     details = {}
     for s in societies:  # heavy per-society text, loaded only when a card opens
+        s.pop("_city_name", None)
         details[s["id"]] = {k: s.pop(k) for k in ("reviews", "description", "trend", "ratings", "images")}
     (WEB / f"{city}.json").write_text(json.dumps(doc, separators=(",", ":")))
     (WEB / f"{city}-details.json").write_text(json.dumps(details, separators=(",", ":")))
@@ -471,7 +549,7 @@ def write_csv(soc_path, unit_path, societies):
     for b in range(1, 6):
         cols += [f"buy_{b}bhk_median", f"buy_{b}bhk_estimate", f"rent_{b}bhk_median", f"rent_{b}bhk_estimate", f"{b}bhk_price_flag"]
     cols += ["rating", "rating_count", "review_count", "amenities", "verified", "smallest_bedroom_ft", "magicbricks_url", "google_maps_url"]
-    with open(soc_path, "w", newline="") as f:
+    with open(soc_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(cols)
         for s in societies:
@@ -487,7 +565,7 @@ def write_csv(soc_path, unit_path, societies):
             row += [s["rating"], s["rating_count"], s["review_count"], "; ".join(s["amenities"]), s["verified"],
                     f"{smallest[0]:.2f} x {smallest[1]:.2f}" if smallest else None, s["url"], s["gmaps"]]
             w.writerow(row)
-    with open(unit_path, "w", newline="") as f:
+    with open(unit_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["society_id", "society", "unit", "bhk", "super_sqft", "carpet_sqft", "listed_sqft", "bedrooms_ft", "all_bedrooms_read",
                     "ai_narrowest_bedroom_ft", "ai_every_bedroom_long_side_at_least_ft", "ai_every_bedroom_area_at_least_sqft", "confidence", "source", "page"])
@@ -500,4 +578,6 @@ def write_csv(soc_path, unit_path, societies):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "gurgaon")
+    city = sys.argv[1] if len(sys.argv) > 1 else "gurgaon"
+    maxp = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+    main(city, max_projects=maxp)

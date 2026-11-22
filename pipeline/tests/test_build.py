@@ -57,6 +57,14 @@ def test_infer_kind_from_name():
     assert build_city.kind_of({"name": "Ashiana Villas"}) == "villa~"
 
 
+def test_walk_score_weights_nearby_pois():
+    full = {k: {"m": 0} for k in ("metro", "park", "school", "hospital", "shopping", "rail")}
+    assert build_city.walk_score(full) == 100
+    assert build_city.walk_score({}) == 0
+    # metro ideal 500 m, zero at 1500 m, weight 25 → halfway is 12.5, rounded to 12
+    assert build_city.walk_score({"metro": {"m": 1000}}) == 12
+
+
 def test_match_verified_needs_whole_name_and_sector():
     ps = [{"mb_id": 1, "name": "M3M", "locality": "Sector 65"},
           {"mb_id": 2, "name": "M3M Heights", "locality": "Sector 65"},

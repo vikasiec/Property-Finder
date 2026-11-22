@@ -4,7 +4,7 @@ import pathlib
 import re
 
 ROOT = pathlib.Path(__file__).parent.parent
-FILE = ROOT / "data" / "verified" / "gurgaon.json"
+FILE = ROOT / "data" / "verified" / "gurgaon.json"  # default; callers should pass the city-specific path
 
 
 def side_to_ft(s):

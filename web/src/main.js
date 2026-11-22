@@ -32,7 +32,7 @@ let myList = [], allAmenities = [];
 const highlights = { glow: true, bounds: true, labels: true, ...store.get('ff-highlights', {}) };
 let commuteMode = false, commutePin = null, commuteMarker = null, commuteRadiusKm = 5;
 let compareMode = false, compareList = [];
-let heatmapOn = false;
+let colorByMode = 'off';
 
 async function boot() {
   const cities = await fetch('/data/cities.json').then((r) => r.json()).catch(() => ({ gurgaon: { name: 'Gurugram' } }));
@@ -601,7 +601,11 @@ function buildControls() {
   $('commute-range').oninput = updateCommuteRadius;
   $('btn-compare').onclick = () => { if (compareList.length >= 2) showCompare(); else { compareMode = !compareMode; $('btn-compare').classList.toggle('live', compareMode); renderResults(); if (compareMode) toast('Check 2–4 societies, then click Compare again.'); } };
   $('compare-close').onclick = closeCompare;
-  $('btn-heatmap').onclick = toggleHeatmap;
+  document.querySelectorAll('input[name="colorby"]').forEach((r) => { r.onchange = () => setColorBy(r.value); });
+  $('dl-metro').onchange = () => toggleMetro();
+  $('dl-schools').onchange = () => toggleSchools();
+  $('dl-flood').onchange = () => toggleFlood();
+  $('dl-aqi').onchange = () => toggleAqi();
   $('layers-btn').onclick = () => $('layers').classList.toggle('open');
   document.querySelectorAll('#layers button[data-mode]').forEach((b) => (b.onclick = () => { setBase(b.dataset.mode); $('layers').classList.remove('open'); }));
   $('btn-theme').onclick = () => setBase(baseMode === 'light' ? 'streets' : 'light');
@@ -900,42 +904,220 @@ function showCompare() {
   $('compare-modal').hidden = false;
 }
 
-// ---------- Feature 4: Price Heatmap ----------
-function toggleHeatmap() {
-  heatmapOn = !heatmapOn;
-  $('btn-heatmap').classList.toggle('live', heatmapOn);
-  $('heatmap-legend').hidden = !heatmapOn;
+// ---------- Colour-by layers ----------
+let colorBySource = false; // true once the shared source is created
+const LABEL_FONT = ['Noto Sans Regular'];
 
-  if (!map.getSource('heatmap-pts')) {
-    const features = [];
-    const vals = [];
-    for (const s of data.societies) {
-      const psf = Object.values(s.prices || {}).map((p) => p.psf).filter(Boolean);
-      if (!psf.length) continue;
-      const avg = psf.reduce((a, b) => a + b, 0) / psf.length;
-      if (avg > 0) vals.push(avg);
-      features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [s.lng, s.lat] }, properties: { psf: avg, name: s.name } });
-    }
-    vals.sort((a, b) => a - b);
-    const lo = vals[Math.floor(vals.length * 0.05)] || 0;
-    const hi = vals[Math.floor(vals.length * 0.95)] || 1;
-    $('hm-lo').textContent = `₹${Math.round(lo).toLocaleString()}/sqft`;
-    $('hm-hi').textContent = `₹${Math.round(hi).toLocaleString()}/sqft`;
+function layersReady() {
+  return !!(map && map.getLayer('labels') && map.getLayer('glow') && map.getLayer('site-fill') && map.getLayer('lbl-road'));
+}
 
-    map.addSource('heatmap-pts', { type: 'geojson', data: { type: 'FeatureCollection', features } });
-    map.addLayer({ id: 'heatmap', type: 'circle', source: 'heatmap-pts',
-      paint: {
-        'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 4, 13, 8, 16, 14],
-        'circle-color': ['interpolate', ['linear'], ['get', 'psf'],
-          lo, '#22c55e', lo + (hi - lo) * 0.25, '#84cc16', lo + (hi - lo) * 0.5, '#eab308',
-          lo + (hi - lo) * 0.75, '#f97316', hi, '#ef4444'],
-        'circle-opacity': 0.85,
-        'circle-stroke-width': 1,
-        'circle-stroke-color': 'rgba(0,0,0,0.4)',
-      } });
+function initColorBy() {
+  if (colorBySource) return;
+  const features = [];
+  for (const s of data.societies) {
+    const psfs = Object.values(s.prices || {}).map((p) => p.psf).filter(Boolean);
+    const avgPsf = psfs.length ? psfs.reduce((a, b) => a + b, 0) / psfs.length : null;
+    const properties = { sid: s.id, status: s.status ?? 'unknown' };
+    if (avgPsf != null) properties.psf = avgPsf;
+    if (s.rental_yield != null) properties.rental_yield = s.rental_yield;
+    if (s.yield_src) properties.yield_src = s.yield_src;
+    if (s.walk_score != null) properties.walk_score = s.walk_score;
+    if (s.possession_year != null) properties.possession_year = s.possession_year;
+    features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [s.lng, s.lat] }, properties });
   }
+  map.addSource('colorby-pts', { type: 'geojson', data: { type: 'FeatureCollection', features } });
+  map.addLayer({ id: 'colorby', type: 'circle', source: 'colorby-pts', layout: { visibility: 'none' },
+    paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 4, 13, 8, 16, 14],
+      'circle-color': '#888', 'circle-opacity': 0.85, 'circle-stroke-width': 1, 'circle-stroke-color': 'rgba(0,0,0,0.4)' } }, 'labels');
+  colorBySource = true;
+}
 
-  map.setLayoutProperty('heatmap', 'visibility', heatmapOn ? 'visible' : 'none');
+function setColorBy(mode) {
+  if (!layersReady()) { toast('Map is still loading.'); return; }
+  colorByMode = mode;
+  initColorBy();
+  const legend = $('layer-legend');
+  if (mode === 'off') {
+    map.setLayoutProperty('colorby', 'visibility', 'none');
+    legend.hidden = true;
+    return;
+  }
+  map.setLayoutProperty('colorby', 'visibility', 'visible');
+  map.setFilter('colorby', mode === 'price' ? ['has', 'psf'] : null);
+  legend.hidden = false;
+
+  if (mode === 'price') {
+    const vals = data.societies.map((s) => { const ps = Object.values(s.prices || {}).map((p) => p.psf).filter(Boolean); return ps.length ? ps.reduce((a, b) => a + b, 0) / ps.length : null; }).filter(Boolean);
+    vals.sort((a, b) => a - b);
+    const lo = vals[Math.floor(vals.length * 0.05)] || 0, hi = vals[Math.floor(vals.length * 0.95)] || 1;
+    map.setPaintProperty('colorby', 'circle-color', ['interpolate', ['linear'], ['get', 'psf'],
+      lo, '#22c55e', lo + (hi - lo) * 0.25, '#84cc16', lo + (hi - lo) * 0.5, '#eab308', lo + (hi - lo) * 0.75, '#f97316', hi, '#ef4444']);
+    map.setPaintProperty('colorby', 'circle-opacity', 0.85);
+    $('ll-title').textContent = 'Price per sq ft';
+    $('ll-dots').innerHTML = '';
+    $('ll-lo').textContent = `₹${Math.round(lo).toLocaleString()}`;
+    $('ll-hi').textContent = `₹${Math.round(hi).toLocaleString()}`;
+    document.querySelector('.ll-bar').style.background = 'linear-gradient(90deg, #22c55e, #84cc16, #eab308, #f97316, #ef4444)';
+    document.querySelector('.ll-bar').style.display = '';
+    document.querySelector('.ll-labels').style.display = '';
+  } else if (mode === 'yield') {
+    map.setPaintProperty('colorby', 'circle-color', ['interpolate', ['linear'], ['coalesce', ['get', 'rental_yield'], 3],
+      1.5, '#ef4444', 2.5, '#f97316', 3.0, '#eab308', 4.0, '#84cc16', 5.0, '#22c55e']);
+    map.setPaintProperty('colorby', 'circle-opacity', ['match', ['get', 'yield_src'], 'listings', 0.85, 0.45]);
+    $('ll-title').textContent = 'Rental yield (annual)';
+    $('ll-dots').innerHTML = '';
+    $('ll-lo').textContent = '< 2%';
+    $('ll-hi').textContent = '5%+';
+    document.querySelector('.ll-bar').style.background = 'linear-gradient(90deg, #ef4444, #f97316, #eab308, #84cc16, #22c55e)';
+    document.querySelector('.ll-bar').style.display = '';
+    document.querySelector('.ll-labels').style.display = '';
+  } else if (mode === 'walkscore') {
+    map.setPaintProperty('colorby', 'circle-color', ['interpolate', ['linear'], ['coalesce', ['get', 'walk_score'], 0],
+      0, '#ef4444', 25, '#f97316', 50, '#eab308', 75, '#84cc16', 100, '#22c55e']);
+    map.setPaintProperty('colorby', 'circle-opacity', 0.85);
+    $('ll-title').textContent = 'Walk score';
+    $('ll-dots').innerHTML = '';
+    $('ll-lo').textContent = '0 (car-dependent)';
+    $('ll-hi').textContent = '100 (walkable)';
+    document.querySelector('.ll-bar').style.background = 'linear-gradient(90deg, #ef4444, #f97316, #eab308, #84cc16, #22c55e)';
+    document.querySelector('.ll-bar').style.display = '';
+    document.querySelector('.ll-labels').style.display = '';
+  } else if (mode === 'supply') {
+    map.setPaintProperty('colorby', 'circle-color', ['case',
+      ['==', ['get', 'status'], 'Ready To Move'], '#22c55e',
+      ['all', ['in', ['get', 'status'], ['literal', ['Under Construction', 'Ongoing']]], ['!', ['to-boolean', ['get', 'possession_year']]]], '#94a3b8',
+      ['all', ['in', ['get', 'status'], ['literal', ['Under Construction', 'Ongoing']]], ['<=', ['get', 'possession_year'], 2027]], '#f97316',
+      ['in', ['get', 'status'], ['literal', ['Under Construction', 'Ongoing']]], '#ef4444',
+      '#94a3b8']);
+    map.setPaintProperty('colorby', 'circle-opacity', 0.85);
+    $('ll-title').textContent = 'Supply pipeline';
+    document.querySelector('.ll-bar').style.display = 'none';
+    document.querySelector('.ll-labels').style.display = 'none';
+    $('ll-dots').innerHTML = '<span><i style="background:#22c55e"></i>Ready</span><span><i style="background:#f97316"></i>By 2027</span><span><i style="background:#ef4444"></i>2028+</span><span><i style="background:#94a3b8"></i>Year unknown</span>';
+  }
+}
+
+function showOverlay(ids, on) {
+  const v = on ? 'visible' : 'none';
+  for (const id of ids) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', v);
+}
+
+function loadJson(url) {
+  return fetch(url).then((r) => { if (!r.ok) throw new Error(`${url} ${r.status}`); return r.json(); });
+}
+
+// ---------- Overlay: Schools ----------
+let schoolsOn = false;
+function toggleSchools() {
+  schoolsOn = $('dl-schools').checked;
+  if (!layersReady()) { schoolsOn = false; $('dl-schools').checked = false; toast('Map is still loading.'); return; }
+  if (schoolsOn && !map.getSource('school-pts')) {
+    loadJson(`/data/${cityId}-pois.json`).then((pois) => {
+      const schools = pois.filter((p) => p.k === 'school');
+      const feats = schools.map((p) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [p.lng, p.lat] },
+        properties: { name: p.name || 'School' } }));
+      map.addSource('school-pts', { type: 'geojson', data: { type: 'FeatureCollection', features: feats } });
+      map.addLayer({ id: 'school-radius', type: 'circle', source: 'school-pts', minzoom: 13,
+        paint: { 'circle-radius': ['interpolate', ['exponential', 2], ['zoom'], 13, 30, 16, 240],
+          'circle-color': '#8b5cf6', 'circle-opacity': 0.08, 'circle-stroke-width': 1, 'circle-stroke-color': '#8b5cf680' } }, 'glow');
+      map.addLayer({ id: 'school-dots', type: 'circle', source: 'school-pts',
+        paint: { 'circle-radius': 5, 'circle-color': '#8b5cf6', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#fff' } }, 'labels');
+      map.addLayer({ id: 'school-labels', type: 'symbol', source: 'school-pts', minzoom: 14,
+        layout: { 'text-field': ['get', 'name'], 'text-font': LABEL_FONT, 'text-size': 11, 'text-offset': [0, 1.5], 'text-anchor': 'top' },
+        paint: { 'text-color': '#c4b5fd', 'text-halo-color': 'rgba(0,0,0,0.7)', 'text-halo-width': 1 } });
+      if (!schoolsOn) showOverlay(['school-dots', 'school-radius', 'school-labels'], false);
+    }).catch(() => { schoolsOn = false; $('dl-schools').checked = false; toast('No school data for this city.'); });
+    return;
+  }
+  showOverlay(['school-dots', 'school-radius', 'school-labels'], schoolsOn);
+}
+
+// ---------- Overlay: Metro routes ----------
+let metroOn = false;
+function toggleMetro() {
+  metroOn = $('dl-metro').checked;
+  if (!layersReady()) { metroOn = false; $('dl-metro').checked = false; toast('Map is still loading.'); return; }
+  if (metroOn && !map.getSource('metro-data')) {
+    loadJson(`/data/${cityId}-transit.geojson`).then((gj) => {
+      map.addSource('metro-data', { type: 'geojson', data: gj });
+      // Above the tower extrusions. A line inserted earlier is painted under them, and the
+      // Aqua route runs through the densest band, so the towers hide the whole line.
+      const metroLine = {
+        filter: ['==', ['geometry-type'], 'LineString'],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+      };
+      const metroColour = ['to-color', ['get', 'colour'], '#8fb4ff'];
+      map.addLayer({ id: 'metro-casing', type: 'line', source: 'metro-data', ...metroLine,
+        paint: { 'line-color': 'rgba(5,5,8,0.85)', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 5, 15, 9], 'line-opacity': 0.9 } }, 'labels');
+      map.addLayer({ id: 'metro-line', type: 'line', source: 'metro-data', ...metroLine,
+        paint: { 'line-color': metroColour, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2.5, 15, 5.5], 'line-opacity': 0.95 } }, 'labels');
+      map.addLayer({ id: 'metro-stops', type: 'circle', source: 'metro-data',
+        filter: ['==', ['geometry-type'], 'Point'],
+        paint: { 'circle-radius': 5, 'circle-color': '#fff', 'circle-stroke-width': 2, 'circle-stroke-color': metroColour } }, 'labels');
+      map.addLayer({ id: 'metro-labels', type: 'symbol', source: 'metro-data',
+        filter: ['==', ['geometry-type'], 'Point'], minzoom: 13,
+        layout: { 'text-field': ['get', 'name'], 'text-font': LABEL_FONT, 'text-size': 11, 'text-offset': [0, 1.5], 'text-anchor': 'top' },
+        paint: { 'text-color': '#a5b4fc', 'text-halo-color': 'rgba(0,0,0,0.7)', 'text-halo-width': 1 } });
+      if (!metroOn) showOverlay(['metro-casing', 'metro-line', 'metro-stops', 'metro-labels'], false);
+    }).catch(() => { metroOn = false; $('dl-metro').checked = false; toast('No metro data for this city.'); });
+    return;
+  }
+  showOverlay(['metro-casing', 'metro-line', 'metro-stops', 'metro-labels'], metroOn);
+}
+
+// ---------- Overlay: Flood / Rivers ----------
+let floodOn = false;
+function toggleFlood() {
+  floodOn = $('dl-flood').checked;
+  if (!layersReady()) { floodOn = false; $('dl-flood').checked = false; toast('Map is still loading.'); return; }
+  if (floodOn && !map.getSource('waterway-data')) {
+    loadJson(`/data/${cityId}-waterways.geojson`).then((gj) => {
+      map.addSource('waterway-data', { type: 'geojson', data: gj });
+      const waterLine = { layout: { 'line-cap': 'round', 'line-join': 'round' } };
+      // Above the towers. The old layers sat under the extrusions, so the rivers disappeared in the built-up band.
+      map.addLayer({ id: 'waterway-buffer', type: 'line', source: 'waterway-data', ...waterLine,
+        paint: { 'line-color': '#1d4ed8', 'line-opacity': 0.45,
+          'line-width': ['interpolate', ['exponential', 1.6], ['zoom'], 10, 14, 13, 36, 16, 90] } }, 'labels');
+      map.addLayer({ id: 'waterway-core', type: 'line', source: 'waterway-data', ...waterLine,
+        paint: { 'line-color': '#7dd3fc', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 3, 15, 7], 'line-opacity': 1 } }, 'labels');
+      map.addLayer({ id: 'waterway-labels', type: 'symbol', source: 'waterway-data', minzoom: 11,
+        layout: { 'text-field': ['get', 'name'], 'text-font': LABEL_FONT, 'text-size': 13, 'symbol-placement': 'line',
+          'text-offset': [0, 1], 'text-letter-spacing': 0.08 },
+        paint: { 'text-color': '#e0f2fe', 'text-halo-color': 'rgba(0,0,0,0.85)', 'text-halo-width': 1.5 } });
+      if (!floodOn) showOverlay(['waterway-buffer', 'waterway-core', 'waterway-labels'], false);
+    }).catch(() => { floodOn = false; $('dl-flood').checked = false; toast('No river data for this city.'); });
+    return;
+  }
+  showOverlay(['waterway-buffer', 'waterway-core', 'waterway-labels'], floodOn);
+}
+
+// ---------- Overlay: AQI ----------
+let aqiOn = false;
+function toggleAqi() {
+  aqiOn = $('dl-aqi').checked;
+  if (!layersReady()) { aqiOn = false; $('dl-aqi').checked = false; toast('Map is still loading.'); return; }
+  if (aqiOn && !map.getSource('aqi-data')) {
+    loadJson(`/data/${cityId}-aqi.json`).then((stations) => {
+      if (!stations.length) { toast('No AQI data available for this city.'); $('dl-aqi').checked = false; aqiOn = false; return; }
+      const feats = stations.map((s) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [s.lng, s.lat] },
+        properties: { name: s.name, aqi: s.aqi, category: s.category, timestamp: s.timestamp } }));
+      map.addSource('aqi-data', { type: 'geojson', data: { type: 'FeatureCollection', features: feats } });
+      map.addLayer({ id: 'aqi-circles', type: 'circle', source: 'aqi-data',
+        paint: { 'circle-radius': 25, 'circle-blur': 0.5, 'circle-opacity': 0.3,
+          'circle-color': ['interpolate', ['linear'], ['get', 'aqi'],
+            0, '#22c55e', 50, '#22c55e', 51, '#eab308', 100, '#eab308',
+            101, '#f97316', 200, '#f97316', 201, '#ef4444', 300, '#ef4444',
+            301, '#7c3aed', 400, '#7c3aed', 401, '#991b1b'] } }, 'lbl-road');
+      map.addLayer({ id: 'aqi-labels', type: 'symbol', source: 'aqi-data',
+        layout: { 'text-field': ['concat', ['to-string', ['get', 'aqi']], '\n', ['get', 'category']],
+          'text-font': LABEL_FONT, 'text-size': 12 },
+        paint: { 'text-color': '#fff', 'text-halo-color': 'rgba(0,0,0,0.8)', 'text-halo-width': 1.5 } });
+      if (!aqiOn) showOverlay(['aqi-circles', 'aqi-labels'], false);
+    }).catch(() => { aqiOn = false; $('dl-aqi').checked = false; toast('No AQI data available for this city.'); });
+    return;
+  }
+  showOverlay(['aqi-circles', 'aqi-labels'], aqiOn);
 }
 
 boot().catch((e) => { console.error(e); document.title = 'ERR ' + e.message; });

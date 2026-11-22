@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 // flatfinder: search the Flat Finder data from a terminal. Same filter logic as the website.
-import { readFile, realpath } from 'node:fs/promises';
+import { readFile, writeFile, realpath, mkdir } from 'node:fs/promises';
+import { existsSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { DEFAULT_CRITERIA, feetLabel, formatINR, matchSociety, priceFor } from '../web/src/filters.js';
 
 const SITE = 'https://flat-finder.pages.dev';
@@ -80,10 +83,25 @@ function smallestRoom(s) {
 
 const money = (p, mode) => (p ? `${p.estimated ? '~' : ''}${formatINR(p.value)}${mode === 'rent' ? '/mo' : ''}` : '');
 
+const CACHE_DIR = join(homedir(), '.cache', 'flatfinder');
+const CACHE_MAX_AGE = 24 * 60 * 60 * 1000;
+
+async function fetchWithCache(cityId) {
+  await mkdir(CACHE_DIR, { recursive: true });
+  const cached = join(CACHE_DIR, `${cityId}.json`);
+  if (existsSync(cached) && Date.now() - statSync(cached).mtimeMs < CACHE_MAX_AGE) {
+    return JSON.parse(await readFile(cached, 'utf8'));
+  }
+  const res = await fetch(`${SITE}/data/${cityId}.json`);
+  const text = await res.text();
+  await writeFile(cached, text);
+  return JSON.parse(text);
+}
+
 async function main() {
   const o = parseArgs(process.argv.slice(2));
   if (o.help) return console.log(HELP);
-  const city = o.data ? JSON.parse(await readFile(o.data, 'utf8')) : await (await fetch(`${SITE}/data/${o.city}.json`)).json();
+  const city = o.data ? JSON.parse(await readFile(o.data, 'utf8')) : await fetchWithCache(o.city);
   const rows = search(city, o);
   if (o.json) return console.log(JSON.stringify(rows.slice(0, o.limit).map(({ s, v }) => ({ verdict: v, ...s })), null, 2));
   console.log(`${rows.length} societies in ${city.city.name}${o.likely ? ' (including likely)' : ''}\n`);

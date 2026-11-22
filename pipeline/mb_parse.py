@@ -23,17 +23,16 @@ def parse_list_page(html):
     """Return the project cards on a list page (dicts with psmName, pdpUrl, ...)."""
     cards = []
     for m in re.finditer(r'"psmName":', html):
-        # walk back to the start of the enclosing object
         j = html.rfind("{", 0, m.start())
-        while j > 0:
+        limit = max(0, m.start() - 5000)
+        while j > limit:
             try:
                 obj, _ = _DEC.raw_decode(html[j:])
                 if "psmName" in obj and "pdpUrl" in obj:
                     cards.append(obj)
-                    break
+                break
             except ValueError:
-                pass
-            j = html.rfind("{", 0, j)
+                j = html.rfind("{", 0, j)
     seen, out = set(), []
     for c in cards:
         if c["psmid"] not in seen:
@@ -138,9 +137,11 @@ def parse_configs(state):
         if not mm or not isinstance(rows, list):
             continue
         b = int(mm.group(1))
+        prices_min = [r["minPriceD"] for r in rows if r.get("minPriceD")]
+        prices_max = [r["maxPriceD"] for r in rows if r.get("maxPriceD")]
         plans[b] = {
-            "price_min": min((r.get("minPriceD") or 0) for r in rows) or None,
-            "price_max": max((r.get("maxPriceD") or 0) for r in rows) or None,
+            "price_min": min(prices_min) if prices_min else None,
+            "price_max": max(prices_max) if prices_max else None,
             "plan_images": sorted({"https://img.staticmb.com/mbimages/project/" + r["unitFlrPlanImg"]
                                    for r in rows if r.get("unitFlrPlanImg")}),
         }

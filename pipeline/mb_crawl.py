@@ -9,6 +9,7 @@ import hashlib
 import json
 import pathlib
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -35,7 +36,10 @@ def fetch(url):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": UA})
             html = urllib.request.urlopen(req, timeout=40).read().decode("utf-8", "ignore")
-            f.write_bytes(gzip.compress(html.encode("utf-8"), 9))
+            tmp = tempfile.NamedTemporaryFile(dir=CACHE, delete=False, suffix=".tmp")
+            tmp.write(gzip.compress(html.encode("utf-8"), 9))
+            tmp.close()
+            pathlib.Path(tmp.name).replace(f)
             time.sleep(DELAY)
             return html
         except Exception as e:  # network hiccup: back off and retry
@@ -49,6 +53,7 @@ def crawl_list():
     total = mb_parse.parse_total(first)
     pages = -(-total // 20)
     projects = {}
+    OUT.mkdir(parents=True, exist_ok=True)
     for n in range(1, pages + 1):
         html = fetch(LIST_URL.format(n))
         if not html:
@@ -56,7 +61,8 @@ def crawl_list():
         for c in mb_parse.parse_list_page(html):
             projects[c["psmid"]] = mb_parse.card_to_project(c)
         print(f"list {n}/{pages}: {len(projects)} projects", flush=True)
-    OUT.mkdir(parents=True, exist_ok=True)
+        if n % 100 == 0:
+            (OUT / "mb_index.json").write_text(json.dumps(list(projects.values()), indent=0))
     (OUT / "mb_index.json").write_text(json.dumps(list(projects.values()), indent=0))
     print("total reported", total, "collected", len(projects))
 

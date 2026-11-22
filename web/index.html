@@ -18,7 +18,6 @@
     <button id="btn-theme" title="Light or dark" aria-label="Switch light or dark"></button>
     <button id="btn-commute" title="Show societies within commute distance">Commute</button>
     <button id="btn-compare" title="Compare selected societies">Compare</button>
-    <button id="btn-heatmap" title="Toggle price heatmap">Heatmap</button>
     <button id="btn-log" title="Show or hide the right panel">Research log</button>
     <button id="btn-hide" title="Hide panels for recording">Hide panels</button>
     <button id="btn-mhide" class="mobile-only" title="Show or hide the panel">Hide panel</button>
@@ -125,6 +124,19 @@
           <label class="sw"><input type="checkbox" id="hl-bounds"> Boundaries</label>
           <label class="sw"><input type="checkbox" id="hl-labels"> Names</label>
         </div>
+        <div class="data-layers">
+          <div class="k" style="font-size:11px;margin-bottom:2px">Colour by</div>
+          <label class="sw"><input type="radio" name="colorby" value="off" checked> Off</label>
+          <label class="sw"><input type="radio" name="colorby" value="price"> Price ₹/sqft</label>
+          <label class="sw"><input type="radio" name="colorby" value="yield"> Rental yield %</label>
+          <label class="sw"><input type="radio" name="colorby" value="walkscore"> Walk score</label>
+          <label class="sw"><input type="radio" name="colorby" value="supply"> Supply pipeline</label>
+          <div class="k" style="font-size:11px;margin-top:8px;margin-bottom:2px">Overlays</div>
+          <label class="sw"><input type="checkbox" id="dl-metro"> Metro routes</label>
+          <label class="sw"><input type="checkbox" id="dl-schools"> Schools</label>
+          <label class="sw"><input type="checkbox" id="dl-flood"> Rivers</label>
+          <label class="sw"><input type="checkbox" id="dl-aqi"> Air quality</label>
+        </div>
       </div>
       <button id="layers-btn" class="layers-btn" title="Map style" aria-label="Map style"><svg viewBox="0 0 24 24" width="16" height="16"><path d="m12 3 9 5-9 5-9-5z M3 13l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></button>
     </div>
@@ -176,11 +188,11 @@
     </div>
   </div>
 
-  <!-- Heatmap legend -->
-  <div class="heatmap-legend" id="heatmap-legend" hidden>
-    <div class="k">Price per sq ft</div>
-    <div class="heatmap-bar"></div>
-    <div class="heatmap-labels"><span id="hm-lo"></span><span id="hm-hi"></span></div>
+  <div class="layer-legend" id="layer-legend" hidden>
+    <div class="k" id="ll-title">Price per sq ft</div>
+    <div class="ll-bar"></div>
+    <div class="ll-labels"><span id="ll-lo"></span><span id="ll-hi"></span></div>
+    <div class="ll-dots" id="ll-dots"></div>
   </div>
 
   <div class="toast" id="toast" hidden></div>

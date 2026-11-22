@@ -228,6 +228,9 @@ body[data-base=light] .maplibregl-ctrl-scale, body[data-base=light] .maplibregl-
 @media (max-width: 700px) { body.has-card .controls, body.has-card .topbar { display: none; } }
 .layer-menu .hl { display: flex; flex-direction: column; justify-content: center; gap: 6px; padding-left: 10px; margin-left: 2px; border-left: 1px solid var(--line); }
 .layer-menu .hl .sw { font-size: 11.5px; white-space: nowrap; }
+.data-layers { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; margin-top: 4px; border-top: 1px solid var(--line); min-width: 150px; }
+.data-layers .k { color: var(--muted); }
+.data-layers .sw { font-size: 11.5px; white-space: nowrap; }
 .topbar button.live { border-color: var(--accent); color: var(--accent); }
 
 /* two-handle sliders */
@@ -332,12 +335,13 @@ body.has-card .maplibregl-ctrl-bottom-right { right: calc(var(--right-w) + var(-
 .results li .cmp-check.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .topbar button.live { border-color: var(--accent); color: var(--accent); }
 
-/* heatmap legend */
-.heatmap-legend { position: absolute; z-index: 3; left: calc(var(--panel-w) + var(--gap) * 2); bottom: 34px; width: 220px;
+.layer-legend { position: absolute; z-index: 3; left: calc(var(--panel-w) + var(--gap) * 2); bottom: 34px; width: 220px;
   background: var(--glass-strong); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; box-shadow: var(--shadow);
   backdrop-filter: blur(18px); display: flex; flex-direction: column; gap: 6px; }
-.heatmap-bar { height: 10px; border-radius: 5px; background: linear-gradient(90deg, #2ecc71, #f1c40f, #e74c3c); }
-.heatmap-labels { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); }
+.ll-bar { height: 10px; border-radius: 5px; }
+.ll-labels { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); }
+.ll-dots { display: flex; flex-wrap: wrap; gap: 8px; font-size: 10.5px; color: var(--muted); }
+.ll-dots i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: middle; margin-right: 3px; }
 @media (max-width: 700px) {
-  .heatmap-legend { left: 10px; bottom: calc(46vh + 10px); width: auto; right: 60px; }
+  .layer-legend { left: 10px; bottom: calc(46vh + 10px); width: auto; right: 60px; }
 }

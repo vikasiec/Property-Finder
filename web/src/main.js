@@ -8,7 +8,7 @@ import { AMENITY_KEYS, DEFAULT_CRITERIA, NEAR, RANK, feetLabel, formatINR, match
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const mobile = matchMedia('(max-width: 700px)').matches;
-const REPO = 'https://github.com/vikasiec/flat-finder';
+const REPO = 'https://github.com/vikasiec/Property-Finder';
 const params = new URLSearchParams(location.search);
 const store = { // localStorage can be missing or blocked: never let it break the page
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },

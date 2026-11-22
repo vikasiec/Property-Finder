@@ -62,6 +62,19 @@ def test_dedupe_pois_drops_same_name_nearby():
     assert out == [a, c, d]
 
 
+def test_assign_station_lines_snaps_within_200m():
+    line = {"type": "Feature", "geometry": {"type": "LineString", "coordinates": [[73.8, 18.5], [73.9, 18.5]]},
+            "properties": {"name": "Purple Line: A → B", "colour": "purple"}}
+    near = {"type": "Feature", "geometry": {"type": "Point", "coordinates": [73.85, 18.5005]},
+            "properties": {"name": "Baner"}}
+    far = {"type": "Feature", "geometry": {"type": "Point", "coordinates": [73.85, 18.51]},
+           "properties": {"name": "Far"}}
+    osm_fetch.assign_station_lines([line, near, far])
+    assert line["properties"]["line"] == "Purple Line"
+    assert near["properties"]["line"] == "Purple Line"
+    assert "line" not in far["properties"]
+
+
 def test_height_of():
     assert osm_fetch.height_of({"height": "60 m"}) == 60
     assert osm_fetch.height_of({"building:levels": "10"}) == 32

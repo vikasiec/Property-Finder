@@ -3,7 +3,7 @@ import maplibregl from 'maplibre-gl';
 import { addBaseLayers, addSocietyLayers, BASE_MODES, createMap, OVERVIEW, setBaseMode, setHighlights, setSelected, setStates, startPulse } from './map.js';
 import { searchSocieties } from './search.js';
 import { createFeed } from './feed.js';
-import { AMENITY_KEYS, DEFAULT_CRITERIA, NEAR, RANK, feetLabel, formatINR, matchSociety, matchUnit, priceFor, roomPasses } from './filters.js';
+import { AMENITY_KEYS, DEFAULT_CRITERIA, NEAR, RANK, feetLabel, formatINR, matchSociety, matchUnit, priceFor, roomPasses, stationDistanceM } from './filters.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -27,10 +27,108 @@ const STATE_LABEL = { match: 'Matches your search', likely: 'Likely match', prob
 let crit = structuredClone(DEFAULT_CRITERIA);
 let baseMode = BASE_MODES.includes(params.get('map')) ? params.get('map') : 'streets';
 let roomMode = 'off', areaUnit = 'gaj', sortBy = 'best';
+
+function parsePriceToken(raw) {
+  if (!raw) return null;
+  const s = raw.trim().toUpperCase();
+  if (!s) return null;
+  if (s.endsWith('CR')) return Math.round(parseFloat(s) * 1e7);
+  if (s.endsWith('L')) return Math.round(parseFloat(s) * 1e5);
+  if (s.endsWith('K')) return Math.round(parseFloat(s) * 1000);
+  const n = parseInt(s, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function formatPriceToken(v) {
+  if (!v) return '';
+  if (v >= 1e7) return `${+(v / 1e7).toFixed(v % 1e7 ? 1 : 0)}Cr`;
+  if (v >= 1e5) return `${+(v / 1e5).toFixed(v % 1e5 ? 1 : 0)}L`;
+  if (v >= 1000) return `${Math.round(v / 1000)}K`;
+  return String(v);
+}
+
+function priceRangeToken(min, max) {
+  if (min && max) return `${formatPriceToken(min)}-${formatPriceToken(max)}`;
+  if (min) return `${formatPriceToken(min)}-`;
+  return `-${formatPriceToken(max)}`;
+}
+
+function readFiltersFromUrl() {
+  const p = new URLSearchParams(location.search);
+  if (p.has('bhk')) crit.bhk = p.get('bhk').split(',').map(Number).filter((n) => n > 0 && n <= 6);
+  if (p.has('room')) {
+    const [a, b] = p.get('room').split('x').map(Number);
+    if (a > 0 && b > 0) crit.room = { a, b };
+  }
+  if (p.has('area')) {
+    const gaj = parseFloat(p.get('area'));
+    if (gaj > 0) { crit.roomArea = Math.round(gaj * 9); roomMode = 'area'; }
+  }
+  if (p.has('sqft')) {
+    const [lo, hi] = p.get('sqft').split('-');
+    if (lo) crit.minSqft = parseInt(lo, 10) || 0;
+    if (hi) crit.maxSqft = parseInt(hi, 10) || null;
+  }
+  if (p.get('mode') === 'rent') crit.mode = 'rent';
+  if (p.has('price')) {
+    const [lo, hi] = p.get('price').split('-');
+    crit.minPrice = parsePriceToken(lo);
+    crit.maxPrice = parsePriceToken(hi);
+  }
+  if (p.has('rent')) {
+    const [lo, hi] = p.get('rent').split('-');
+    crit.minRent = parsePriceToken(lo);
+    crit.maxRent = parsePriceToken(hi);
+  }
+  if (p.has('amen')) crit.amenities = p.get('amen').split(',').filter(Boolean);
+  if (p.has('near')) crit.near = p.get('near').split(',').filter((k) => NEAR[k]);
+  if (p.get('ready') === '1') crit.ready = true;
+  if (p.has('q')) crit.q = p.get('q');
+  if (p.get('est') === '0') crit.estimates = false;
+  if (p.has('kind')) {
+    const kinds = p.get('kind').split(',').filter(Boolean);
+    if (kinds.length) crit.kinds = kinds;
+  }
+  const sorts = ['best', 'score', 'rating', 'price', 'listings', 'distance', 'station', 'liquidity', 'builder', 'trend-up', 'trend-stable', 'commute'];
+  if (sorts.includes(p.get('sort'))) sortBy = p.get('sort');
+  const colours = ['off', 'price', 'yield', 'walkscore', 'supply', 'liquidity', 'safety', 'noise'];
+  if (colours.includes(p.get('colorby'))) colorByMode = p.get('colorby');
+}
+
+function syncUrlFromFilters() {
+  if (!cityId) return;
+  const p = new URLSearchParams();
+  p.set('city', cityId);
+  if (params.has('nointro')) p.set('nointro', params.get('nointro') || '1');
+  if (params.get('list')) p.set('list', params.get('list'));
+  if (crit.bhk.length) p.set('bhk', [...new Set(crit.bhk)].sort((a, b) => a - b).join(','));
+  if (crit.room) p.set('room', `${crit.room.a}x${crit.room.b}`);
+  if (crit.roomArea) p.set('area', String(+(crit.roomArea / 9).toFixed(2)));
+  if (crit.minSqft || crit.maxSqft) p.set('sqft', `${crit.minSqft || ''}-${crit.maxSqft || ''}`);
+  if (crit.mode === 'rent') {
+    p.set('mode', 'rent');
+    if (crit.minRent || crit.maxRent) p.set('rent', priceRangeToken(crit.minRent, crit.maxRent));
+  } else if (crit.minPrice || crit.maxPrice) p.set('price', priceRangeToken(crit.minPrice, crit.maxPrice));
+  if (crit.amenities.length) p.set('amen', crit.amenities.join(','));
+  if (crit.near.length) p.set('near', crit.near.join(','));
+  if (crit.ready) p.set('ready', '1');
+  if (crit.q) p.set('q', crit.q);
+  if (crit.estimates === false) p.set('est', '0');
+  if (!(crit.kinds.length === 1 && crit.kinds[0] === 'apartment')) p.set('kind', crit.kinds.join(','));
+  if (sortBy !== 'best') p.set('sort', sortBy);
+  if (colorByMode !== 'off') p.set('colorby', colorByMode);
+  if (baseMode !== 'streets') p.set('map', baseMode);
+  if (selected) p.set('open', selected);
+  const next = `${location.pathname}?${p.toString()}`;
+  if (next !== `${location.pathname}${location.search}`) history.replaceState(null, '', next);
+}
 let data, byId, map, feed, selected = null, states = new Map(), tourTimer = null, cityId = 'gurgaon', details = null;
 let myList = [], allAmenities = [];
 const highlights = { glow: true, bounds: true, labels: true, ...store.get('ff-highlights', {}) };
-let commuteMode = false, commutePin = null, commuteMarker = null, commuteRadiusKm = 5;
+let commuteMode = false, commutePin = null, commuteMarker = null, commuteRadiusKm = 5, commuteTimeMode = 'radius';
+let driveCache = new Map();
+let metroSearchMode = false, transitGj = null, metroLineName = '', metroRadiusM = 1000, metroSortWas = null;
+const metroLineCache = new Map();
 let compareMode = false, compareList = [];
 let colorByMode = 'off';
 
@@ -53,6 +151,7 @@ async function boot() {
   allAmenities = [...freq].sort((a, b) => b[1] - a[1]).map(([a, n]) => ({ name: a, n }));
 
   myList = params.get('list') ? params.get('list').split(',').filter((id) => byId.has(id)) : store.get(`ff-list-${cityId}`, []).filter((id) => byId.has(id));
+  readFiltersFromUrl();
   const c = city.counts, m = city.price_model || {}, rated = city.societies.filter((s) => s.rating).length;
   $('note').textContent = `${c.on_map.toLocaleString()} societies · ${(c.for_sale || 0).toLocaleString()} homes for sale, ${(c.for_rent || 0).toLocaleString()} for rent on Magicbricks · ${c.verified} verified from brochures and HRERA plans`;
   $('about-prices').innerHTML = `Prices and rents are medians of live Magicbricks listings. <b>⚠</b> marks a listing price our checks think is a typo (far from the same home nearby, or rent and price that cannot both be right): it is shown as listed but not used for filters. <b>~</b> marks our estimate: rent is about ${((m.city_yield || 0.025) * 100).toFixed(1)}% of the price per year here (measured on ${m.pairs || 0} society and BHK pairs, correlation ${m.log_price_rent_correlation ?? 'n/a'}). "Probably fits" uses a cautious bedroom size estimated from unit size (${city.room_model?.n || 0} verified unit types). Resident ratings exist for ${rated.toLocaleString()} societies.`;
@@ -62,6 +161,16 @@ async function boot() {
 
   feed = createFeed($('feed'), $('log-mode'), { events: city.events, byId });
   buildFilters();
+  if (sortBy !== 'best') $('f-sort').value = sortBy;
+  if (crit.q) {
+    $('q').value = crit.q;
+    $('q-pill').hidden = false;
+    $('q-pill').innerHTML = `Showing names matching "<b>${esc(crit.q)}</b>" <button class="iconbtn" aria-label="Clear">×</button>`;
+    $('q-pill').querySelector('button').onclick = () => { $('q').value = ''; setQuery(''); };
+    showSimilarLocalities(crit.q);
+  }
+  const colour = document.querySelector(`input[name="colorby"][value="${colorByMode}"]`);
+  if (colour) colour.checked = true;
   buildSearch();
   buildList();
   buildControls();
@@ -86,6 +195,9 @@ async function boot() {
     setHighlights(map, highlights);
     startPulse(map);
     initCommuteLayer();
+    initMetroSearchLayer();
+    initIsochroneLayer();
+    if (colorByMode !== 'off') setColorBy(colorByMode);
     map.on('click', (e) => {
       if (commuteMode && !commutePin) placeCommutePin(e.lngLat);
     });
@@ -234,7 +346,12 @@ function buildFilters() {
   $('f-est').onchange = () => { crit.estimates = $('f-est').checked; applyFilters(); };
   $('amen-q').oninput = amenList;
   $('f-ready').onchange = () => { crit.ready = $('f-ready').checked; applyFilters(); };
-  $('f-sort').onchange = () => { sortBy = $('f-sort').value; renderResults(); };
+  $('f-sort').onchange = () => { sortBy = $('f-sort').value; renderResults(); syncUrlFromFilters(); };
+  $('btn-copyurl').onclick = async () => {
+    syncUrlFromFilters();
+    try { await navigator.clipboard.writeText(location.href); $('btn-copyurl').textContent = 'Copied'; setTimeout(() => { $('btn-copyurl').textContent = 'Copy link'; }, 1600); }
+    catch { prompt('Copy this link', location.href); }
+  };
   $('btn-replay').onclick = intro;
   $('btn-tour').onclick = tour;
   $('btn-hide').onclick = () => document.body.classList.toggle('bare');
@@ -258,6 +375,14 @@ function applyFilters(wave = false) {
       const d = crit.commuteDist.distances.get(s.id);
       if (d == null || d > crit.commuteDist.km) st = 'no';
     }
+    if (st !== 'no' && crit.commuteTime) {
+      const mins = crit.commuteTime.minutes.get(s.id);
+      if (mins != null && mins > crit.commuteTime.maxMin) st = 'no';
+    }
+    if (st !== 'no' && crit.metroSearch) {
+      const m = stationDistanceM(crit.metroSearch.nearest, s.id);
+      if (m > crit.metroSearch.radiusM) st = 'no';
+    }
     return [s.id, st];
   }));
   const changed = [...next].filter(([id, st]) => states.get(id) !== st);
@@ -271,7 +396,9 @@ function applyFilters(wave = false) {
     waveTimer = setInterval(() => { setStates(map, changed.slice(i, i + per)); i += per; if (i >= changed.length) clearInterval(waveTimer); }, 50);
   } else if (map?.getSource?.('shapes')) setStates(map, changed);
   renderResults();
+  if (metroSearchMode) renderMetroTable();
   if (selected) renderCard(byId.get(selected));
+  syncUrlFromFilters();
 }
 const dist = (s, c) => (s.lng - c[0]) ** 2 + (s.lat - c[1]) ** 2;
 
@@ -285,6 +412,12 @@ function sorted(list) {
     price: (a, b) => price(a) - price(b),
     listings: (a, b) => ((b.sale_count || 0) + (b.rent_count || 0)) - ((a.sale_count || 0) + (a.rent_count || 0)),
     distance: (a, b) => cdist(a) - cdist(b),
+    station: (a, b) => stationDistanceM(crit.metroSearch?.nearest, a.id) - stationDistanceM(crit.metroSearch?.nearest, b.id),
+    liquidity: (a, b) => (b.liquidity_score || 0) - (a.liquidity_score || 0),
+    builder: (a, b) => (b.builder_record?.delivery_pct || 0) - (a.builder_record?.delivery_pct || 0),
+    'trend-up': (a, b) => (b.trend_pct ?? -999) - (a.trend_pct ?? -999),
+    'trend-stable': (a, b) => Math.abs(a.trend_pct ?? 999) - Math.abs(b.trend_pct ?? 999),
+    commute: (a, b) => (crit.commuteTime?.minutes.get(a.id) ?? 9999) - (crit.commuteTime?.minutes.get(b.id) ?? 9999),
   }[sortBy];
   return list.sort(by);
 }
@@ -328,7 +461,9 @@ function resultItem(s) {
   const p = priceFor(s, crit.mode, crit.bhk);
   const money = p ? `${p.estimated ? '~' : ''}${formatINR(p.value)}${crit.mode === 'rent' ? '/mo' : ''}` : '';
   const how = s.verified ? ' · checked by hand' : s.ai_read ? ' · AI-read plans' : '';
-  const distText = crit.commuteDist ? (() => { const d = crit.commuteDist.distances.get(s.id); return d != null ? ` · ${d.toFixed(1)} km` : ''; })() : '';
+  const driveMin = crit.commuteTime?.minutes.get(s.id);
+  const distText = crit.commuteDist ? (() => { const d = crit.commuteDist.distances.get(s.id); return d != null ? ` · ${d.toFixed(1)} km` : ''; })()
+    : driveMin != null ? ` · ${driveMin} min drive` : metroWalkText(s);
   const cmpCheck = compareMode ? `<span class="cmp-check ${compareList.includes(s.id) ? 'on' : ''}" data-cmp="${s.id}">✓</span>` : '';
   li.innerHTML = `${cmpCheck}<span class="nm">${myList.includes(s.id) ? '★ ' : ''}${esc(s.name)}<small>${esc(s.locality || '')}${how}${distText}</small></span>
     <span class="tag ${st}">${money}${s.score != null ? `<small>score ${s.score}</small>` : ''}</span>`;
@@ -415,7 +550,7 @@ function renderCard(s) {
     .filter(([k]) => near[k]).map(([k, l]) => `<div><span>${l}</span><b>${metres(near[k].m)}</b><small>${esc(near[k].name || '')}${near[k].n > 1 ? ` · ${near[k].n} within 1 km` : ''}</small></div>`).join('');
   const ratingBars = d && Object.keys(d.ratings || {}).length ? `<div class="bars">${Object.entries(d.ratings).map(([k, v]) => `<div><span>${esc(k)}</span><i style="--w:${(v / 5) * 100}%"></i><b>${v}</b></div>`).join('')}</div>` : '';
   const reviews = d?.reviews?.length ? `<div class="reviews">${d.reviews.slice(0, 3).map((r) => `<blockquote>${esc(r.text)}<cite>${esc(r.by || 'Resident')}${r.date ? ' · ' + esc(r.date) : ''}</cite></blockquote>`).join('')}</div>` : '';
-  const trend = d?.trend?.length > 1 ? sparkline(d.trend) : '';
+  const trend = d?.trend?.length > 1 ? `${sparkline(d.trend)}<button type="button" class="linkbtn" id="trend-open">Show trend</button><div id="trend-box" hidden></div>` : '';
   const about = d?.description ? `<details><summary>About this project</summary><p class="fine">${esc(d.description)}</p></details>` : '';
   const inList = myList.includes(s.id);
   const photos = d?.images?.length ? `<div class="photos">${d.images.map((im) => `<a href="${esc(im.full)}" target="_blank" rel="noopener"><img src="${esc(im.thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.remove()"></a>`).join('')}</div><div class="fine">Photos: Magicbricks, opens full size</div>` : '';
@@ -426,9 +561,11 @@ function renderCard(s) {
     </div>
     ${photos}
     <h2>${esc(s.name)}</h2>
-    <div class="meta">${esc(s.developer || '')}${s.locality ? ' · ' + esc(s.locality) : ''} · ${esc(s.config_text || s.kind)}${s.kind_inferred ? ' <span class="fine">(type inferred from name)</span>' : ''}</div>
+    <div class="meta">${esc(s.developer || '')}${s.locality ? ' · ' + esc(s.locality) : ''} · ${esc(s.config_text || s.kind)}${s.kind_inferred ? ' <span class="fine">(type inferred from name)</span>' : ''}${s.locality ? ` <button type="button" class="linkbtn" id="similar-open">Similar areas</button>` : ''}</div>
+    ${metroWalkText(s) ? `<div class="meta">${metroWalkText(s).replace(/^ · /, '')}</div>` : ''}
     <div class="meta">${esc(facts2)}</div>
     ${score}
+    ${signalRows(s)}
     <div class="meta">${s.rating ? `<span class="stars">★ ${s.rating.toFixed(1)}</span> ${s.rating_count || 0} resident ratings · ${s.review_count || 0} reviews · ` : ''}${counts}</div>
     ${s.note ? `<div class="fine">${esc(s.note)}</div>` : ''}
     <h4>Buy and rent</h4>
@@ -452,6 +589,12 @@ function renderCard(s) {
   $('card').hidden = false;
   $('c-close').onclick = () => { stopTour(); closeCard(); };
   $('c-star').onclick = () => { toggle(myList, s.id); saveList(); renderCard(s); renderResults(); };
+  $('similar-open')?.addEventListener('click', () => { $('q').value = s.locality; setQuery(s.locality); if (mobile) showMobile('search'); });
+  $('trend-open')?.addEventListener('click', () => {
+    const box = $('trend-box');
+    box.hidden = !box.hidden;
+    if (!box.hidden) box.innerHTML = renderTrendChart(d.trend);
+  });
   if (!details) loadDetails().then(() => { if (selected === s.id) renderCard(s); });
 }
 
@@ -465,8 +608,59 @@ function sparkline(trend) {
   const vals = trend.map((t) => t[1]), lo = Math.min(...vals), hi = Math.max(...vals), w = 200, h = 36;
   const pts = vals.map((v, i) => `${(i / (vals.length - 1)) * w},${h - 4 - ((v - lo) / (hi - lo || 1)) * (h - 8)}`).join(' ');
   const ch = ((vals.at(-1) - vals[0]) / vals[0]) * 100;
-  return `<div class="trend"><svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="2"/></svg>
-    <span class="fine">Average price per sq ft ${trend[0][0]} to ${trend.at(-1)[0]}: ₹${vals[0].toLocaleString()} to ₹${vals.at(-1).toLocaleString()} (${ch >= 0 ? '+' : ''}${ch.toFixed(0)}%)</span></div>`;
+  const colour = ch >= 0 ? '#4caf50' : '#f44336';
+  return `<div class="trend sparkline"><svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="${colour}" stroke-width="2"/></svg>
+    <span class="trend-change" style="color:${colour}">${ch >= 0 ? '↑' : '↓'}${Math.abs(ch).toFixed(0)}%</span>
+    <span class="fine">₹${vals[0].toLocaleString()} to ₹${vals.at(-1).toLocaleString()}/sq ft, ${trend[0][0]}–${trend.at(-1)[0]}</span></div>`;
+}
+
+function renderTrendChart(trend) {
+  const width = 280, height = 140, pad = 36;
+  const vals = trend.map((t) => t[1]);
+  const dates = trend.map((t) => String(t[0]));
+  const min = Math.min(...vals) * 0.95, max = Math.max(...vals) * 1.05;
+  const scaleX = (i) => pad + (i / (vals.length - 1)) * (width - 2 * pad);
+  const scaleY = (v) => height - pad - ((v - min) / (max - min || 1)) * (height - 2 * pad);
+  const path = vals.map((v, i) => `${i ? 'L' : 'M'}${scaleX(i)},${scaleY(v)}`).join(' ');
+  const yLabels = [min, (min + max) / 2, max].map((v) => `<text x="${pad - 4}" y="${scaleY(v)}" text-anchor="end" font-size="9" fill="#999">₹${Math.round(v).toLocaleString()}</text>`).join('');
+  const xIdx = [0, Math.floor(dates.length / 2), dates.length - 1];
+  const xLabels = xIdx.map((i) => `<text x="${scaleX(i)}" y="${height - 6}" text-anchor="middle" font-size="9" fill="#999">${esc(dates[i])}</text>`).join('');
+  return `<svg width="${width}" height="${height}" class="trend-chart" viewBox="0 0 ${width} ${height}"><path d="${path}" fill="none" stroke="#7dd3fc" stroke-width="2"/>${vals.map((v, i) => `<circle cx="${scaleX(i)}" cy="${scaleY(v)}" r="2.5" fill="#7dd3fc"/>`).join('')}${yLabels}${xLabels}</svg>`;
+}
+
+function signalRows(s) {
+  const bits = [];
+  if (s.liquidity_score != null) {
+    const level = s.liquidity_score >= 70 ? 'high' : s.liquidity_score >= 40 ? 'med' : 'low';
+    bits.push(`<div class="liquidity-row"><span class="liq-badge liq-${level}">${esc(s.liquidity_label || level)} liquidity</span><span class="fine" title="Score ${s.liquidity_score}/100 from listing depth, price spread, and rental demand. Not a forecast of how fast one flat would sell.">${(s.sale_count || 0)} sale + ${(s.rent_count || 0)} rental listings</span></div>`);
+  }
+  const rec = s.builder_record;
+  if (rec && s.developer) {
+    const badge = rec.delivery_pct >= 80 ? 'builder-good' : rec.delivery_pct >= 50 ? 'builder-avg' : 'builder-poor';
+    bits.push(`<div class="builder-info"><div class="k">Builder · ${esc(s.developer)}</div><div class="builder-stats"><span class="builder-badge ${badge}">${rec.delivery_pct}% ready to move</span><span class="fine">${rec.delivered}/${rec.total} projects in this city</span></div>${s.rera_id ? `<div class="rera-row"><span class="fine">RERA ${esc(s.rera_id)}</span>${s.rera_link ? ` <a href="${esc(s.rera_link)}" target="_blank" rel="noopener" class="fine">Open the state portal</a>` : ''}</div>` : ''}</div>`);
+  }
+  if (s.safety_score != null) {
+    const level = s.safety_score > 70 ? 'good' : s.safety_score >= 40 ? 'moderate' : 'concern';
+    bits.push(`<div class="safety-row"><span class="safety-badge safety-${level}">${s.safety_score}/100</span><span class="fine" title="Ward-level reported crime, not a guarantee of personal safety.">Safety · ${esc(s.safety_zone || 'nearest station')}</span></div>`);
+  }
+  if ((s.noise_score || 0) > 50) {
+    bits.push(`<div class="noise-warn">Noise zone: near a ${esc(s.noise_source || 'busy corridor')}</div>`);
+  }
+  const driveMin = crit.commuteTime?.minutes.get(s.id);
+  if (driveMin != null) bits.push(`<div class="commute-info">${driveMin} min drive from the pin</div>`);
+  return bits.join('');
+}
+
+function showSimilarLocalities(locality) {
+  const key = Object.keys(data.similar_localities || {}).find((name) => name.toLowerCase() === (locality || '').trim().toLowerCase());
+  const similar = key ? data.similar_localities[key] : null;
+  $('similar-areas')?.remove();
+  if (!similar?.length) return;
+  const html = `<div class="similar-areas" id="similar-areas"><div class="k">If you like ${esc(key)}, also consider</div><div class="similar-chips">${similar.map((row) => `<button type="button" class="similar-chip" data-loc="${esc(row.name)}"><b>${esc(row.name)}</b><span class="fine">${row.count} societies · ₹${Math.round(row.med_psf).toLocaleString()}/sq ft ${row.diff_psf_pct < 0 ? `<span class="cheaper">${row.diff_psf_pct}%</span>` : `<span class="pricier">+${row.diff_psf_pct}%</span>`}</span></button>`).join('')}</div></div>`;
+  $('q-pill').insertAdjacentHTML('afterend', html);
+  document.querySelectorAll('.similar-chip').forEach((btn) => {
+    btn.onclick = () => { $('q').value = btn.dataset.loc; setQuery(btn.dataset.loc); };
+  });
 }
 
 // ---------- phone: one bottom sheet, two tabs (search | society) ----------
@@ -486,6 +680,36 @@ function buildMobile() {
   };
   $('m-collapse').onclick = collapse;
   $('btn-mhide').onclick = collapse;
+  bindCardSwipe();
+}
+
+function bindCardSwipe() {
+  const card = $('card');
+  let startY = null;
+  card.addEventListener('touchstart', (e) => {
+    if (!mobile) return;
+    const top = card.getBoundingClientRect().top;
+    if (e.touches[0].clientY - top > 36) { startY = null; return; }
+    startY = e.touches[0].clientY;
+  }, { passive: true });
+  card.addEventListener('touchmove', (e) => {
+    if (startY == null) return;
+    const dy = e.touches[0].clientY - startY;
+    if (dy > 0) {
+      card.style.transition = 'none';
+      card.style.transform = `translateY(${dy}px)`;
+    }
+  }, { passive: true });
+  card.addEventListener('touchend', (e) => {
+    if (startY == null) return;
+    const dy = e.changedTouches[0].clientY - startY;
+    startY = null;
+    card.style.transition = 'transform .25s ease';
+    if (dy > 90) {
+      card.style.transform = '';
+      closeCard();
+    } else card.style.transform = '';
+  });
 }
 
 // ---------- first visit: point out the 2D / 3D switch ----------
@@ -596,9 +820,21 @@ function buildControls() {
     }, () => { $('ctl-locate').classList.remove('busy'); toast('Could not get your location.'); }, { enableHighAccuracy: true, timeout: 10000 });
   };
   $('btn-commute').onclick = toggleCommute;
+  $('btn-metro-search').onclick = toggleMetroSearch;
+  $('metro-close').onclick = closeMetroSearch;
+  $('metro-line').onchange = () => { metroLineName = $('metro-line').value; updateMetroSearch({ fit: true }); };
+  $('metro-radius').oninput = () => { metroRadiusM = +$('metro-radius').value; updateMetroSearch(); };
   $('commute-close').onclick = closeCommute;
   $('commute-clear').onclick = clearCommutePin;
   $('commute-range').oninput = updateCommuteRadius;
+  $('commute-time-range').oninput = () => {
+    driveMaxMin = +$('commute-time-range').value;
+    $('commute-time-val').textContent = `${driveMaxMin} min`;
+    const key = commutePin ? pinCacheKey(commutePin) : null;
+    if (commuteTimeMode === 'drive' && key && driveCache.has(key)) applyDrive(driveCache.get(key));
+  };
+  document.querySelectorAll('#commute-mode-seg button').forEach((b) => { b.onclick = () => setCommuteTimeMode(b.dataset.cm); });
+  $('dl-noise').onchange = () => toggleNoise();
   $('btn-compare').onclick = () => { if (compareList.length >= 2) showCompare(); else { compareMode = !compareMode; $('btn-compare').classList.toggle('live', compareMode); renderResults(); if (compareMode) toast('Check 2–4 societies, then click Compare again.'); } };
   $('compare-close').onclick = closeCompare;
   document.querySelectorAll('input[name="colorby"]').forEach((r) => { r.onchange = () => setColorBy(r.value); });
@@ -700,6 +936,7 @@ function setQuery(q) {
   $('q-pill').innerHTML = q ? `Showing names matching "<b>${esc(q)}</b>" <button class="iconbtn" aria-label="Clear">×</button>` : '';
   $('q-pill').querySelector('button')?.addEventListener('click', () => { $('q').value = ''; setQuery(''); });
   applyFilters();
+  showSimilarLocalities(q);
   if (q && map) {
     const hits = data.societies.filter((s) => states.get(s.id) !== 'no');
     if (hits.length) {
@@ -736,7 +973,7 @@ function tour() {
   };
   next();
 }
-addEventListener('keydown', (e) => { if (e.key === 'Escape') { stopTour(); closeCommute(); closeCompare(); } });
+addEventListener('keydown', (e) => { if (e.key === 'Escape') { stopTour(); closeMetroSearch(); closeCommute(); closeCompare(); } });
 
 // ---------- Feature 1: Commute Radius ----------
 function distKm(lat1, lng1, lat2, lng2) {
@@ -758,6 +995,7 @@ function makeCircle(center, radiusKm, points = 64) {
 }
 
 function toggleCommute() {
+  if (!commuteMode && metroSearchMode) closeMetroSearch();
   commuteMode = !commuteMode;
   $('btn-commute').classList.toggle('live', commuteMode);
   $('commute-panel').hidden = !commuteMode;
@@ -774,15 +1012,25 @@ function closeCommute() {
   $('commute-panel').hidden = true;
   map.getCanvas().style.cursor = '';
   clearCommutePin();
+  if (commuteTimeMode !== 'radius') {
+    commuteTimeMode = 'radius';
+    document.querySelectorAll('#commute-mode-seg button').forEach((b) => b.classList.toggle('on', b.dataset.cm === 'radius'));
+    $('commute-radius-controls').hidden = false;
+    $('commute-time-controls').hidden = true;
+  }
+  if (driveSortWas) { sortBy = driveSortWas; $('f-sort').value = sortBy; driveSortWas = null; renderResults(); syncUrlFromFilters(); }
 }
 
 function clearCommutePin() {
   commutePin = null;
+  driveFetchToken += 1;
   if (commuteMarker) { commuteMarker.remove(); commuteMarker = null; }
   if (map.getSource('commute-circle')) map.getSource('commute-circle').setData({ type: 'FeatureCollection', features: [] });
+  clearIsochrone();
   $('commute-hint').hidden = false;
   $('commute-controls').hidden = true;
   crit.commuteDist = null;
+  crit.commuteTime = null;
   applyFilters();
 }
 
@@ -795,11 +1043,11 @@ function placeCommutePin(lngLat) {
   el.className = 'work-pin';
   el.innerHTML = '<svg viewBox="0 0 32 32"><path d="M16 2C10.5 2 6 6.5 6 12c0 8 10 18 10 18s10-10 10-18c0-5.5-4.5-10-10-10z" fill="#ffd9a0" stroke="#0b0b0c" stroke-width="1.5"/><circle cx="16" cy="12" r="4" fill="#0b0b0c"/></svg>';
   commuteMarker = new maplibregl.Marker({ element: el, draggable: true }).setLngLat(commutePin).addTo(map);
-  commuteMarker.on('dragend', () => { commutePin = [commuteMarker.getLngLat().lng, commuteMarker.getLngLat().lat]; updateCommuteRadius(); });
+  commuteMarker.on('dragend', () => { commutePin = [commuteMarker.getLngLat().lng, commuteMarker.getLngLat().lat]; refreshCommute(); });
 
   $('commute-hint').hidden = true;
   $('commute-controls').hidden = false;
-  updateCommuteRadius();
+  refreshCommute();
 }
 
 function updateCommuteRadius() {
@@ -819,9 +1067,140 @@ function updateCommuteRadius() {
     distances.set(s.id, d);
     if (d <= commuteRadiusKm) inside++;
   }
+  crit.commuteTime = null;
+  clearIsochrone();
   crit.commuteDist = { pin: commutePin, km: commuteRadiusKm, distances };
   $('commute-stats').innerHTML = `<b>${inside}</b> societies within ${commuteRadiusKm} km · ~${Math.round(commuteRadiusKm / 0.5)} min drive`;
   applyFilters();
+}
+
+let driveSortWas = null;
+let driveMaxMin = 30;
+let driveFetchToken = 0;
+
+function pinCacheKey(pin) {
+  return `${pin[0].toFixed(3)},${pin[1].toFixed(3)}`;
+}
+
+function refreshCommute() {
+  if (!commutePin) return;
+  if (commuteTimeMode === 'drive') fetchDriveTimes();
+  else updateCommuteRadius();
+}
+
+function setCommuteTimeMode(mode) {
+  if (mode === commuteTimeMode) return;
+  commuteTimeMode = mode;
+  document.querySelectorAll('#commute-mode-seg button').forEach((b) => b.classList.toggle('on', b.dataset.cm === mode));
+  $('commute-radius-controls').hidden = mode !== 'radius';
+  $('commute-time-controls').hidden = mode !== 'drive';
+  if (mode === 'drive') {
+    if (sortBy !== 'commute') { driveSortWas = sortBy; sortBy = 'commute'; $('f-sort').value = 'commute'; }
+    if (commutePin) fetchDriveTimes();
+    else applyFilters();
+  } else if (driveSortWas) {
+    sortBy = driveSortWas;
+    $('f-sort').value = sortBy;
+    driveSortWas = null;
+    refreshCommute();
+  } else refreshCommute();
+}
+
+function clearIsochrone() {
+  const src = map?.getSource?.('isochrone');
+  if (src) src.setData({ type: 'FeatureCollection', features: [] });
+}
+
+function convexHull(points) {
+  const pts = points.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (pts.length < 3) return pts;
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const chain = (list) => {
+    const out = [];
+    for (const p of list) {
+      while (out.length >= 2 && cross(out[out.length - 2], out[out.length - 1], p) <= 0) out.pop();
+      out.push(p);
+    }
+    return out;
+  };
+  const lower = chain(pts);
+  const upper = chain(pts.slice().reverse());
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+function applyDrive(minutes) {
+  driveMaxMin = +$('commute-time-range').value || driveMaxMin;
+  crit.commuteDist = null;
+  if (map.getSource('commute-circle')) map.getSource('commute-circle').setData({ type: 'FeatureCollection', features: [] });
+  crit.commuteTime = { maxMin: driveMaxMin, minutes };
+  const inside = [];
+  let n = 0;
+  for (const [id, mins] of minutes) {
+    if (mins > driveMaxMin) continue;
+    n += 1;
+    const s = byId.get(id);
+    if (s) inside.push([s.lng, s.lat]);
+  }
+  const hull = convexHull(inside);
+  const src = map.getSource('isochrone');
+  if (src && hull.length >= 3) {
+    const ring = hull.concat([hull[0]]);
+    src.setData({ type: 'FeatureCollection', features: [{ type: 'Feature', properties: { kind: 'drive' }, geometry: { type: 'Polygon', coordinates: [ring] } }] });
+  } else clearIsochrone();
+  $('commute-stats').innerHTML = `<b>${n}</b> within ${driveMaxMin} min · ${minutes.size} timed (nearest 99 inside 25 km). Unrouted societies stay visible.`;
+  applyFilters();
+}
+
+async function fetchDriveTimes() {
+  if (!commutePin) return;
+  const pin = commutePin.slice();
+  const key = pinCacheKey(pin);
+  const token = ++driveFetchToken;
+  const cached = driveCache.get(key);
+  if (cached) { applyDrive(cached); return; }
+  const near = data.societies
+    .map((s) => ({ s, d: distKm(pin[1], pin[0], s.lat, s.lng) }))
+    .filter((row) => row.d <= 25)
+    .sort((a, b) => a.d - b.d)
+    .slice(0, 99);
+  if (!near.length) { toast('No societies within 25 km of the pin.'); return; }
+  $('commute-stats').textContent = 'Looking up drive times…';
+  const coords = [[pin[0], pin[1]], ...near.map((row) => [row.s.lng, row.s.lat])];
+  const path = coords.map((c) => `${c[0].toFixed(5)},${c[1].toFixed(5)}`).join(';');
+  try {
+    const res = await fetch(`https://router.project-osrm.org/table/v1/driving/${path}?sources=0&annotations=duration`);
+    if (!res.ok) throw new Error(String(res.status));
+    const body = await res.json();
+    if (token !== driveFetchToken || !commutePin || pinCacheKey(commutePin) !== key) return;
+    const durations = body.durations?.[0] || [];
+    const minutes = new Map();
+    near.forEach((row, i) => {
+      const sec = durations[i + 1];
+      if (sec != null && sec >= 0) minutes.set(row.s.id, Math.max(1, Math.round(sec / 60)));
+    });
+    driveCache.set(key, minutes);
+    applyDrive(minutes);
+  } catch {
+    if (token !== driveFetchToken) return;
+    toast('Drive times are unavailable right now. Radius mode still works.');
+    commuteTimeMode = 'radius';
+    document.querySelectorAll('#commute-mode-seg button').forEach((b) => b.classList.toggle('on', b.dataset.cm === 'radius'));
+    $('commute-radius-controls').hidden = false;
+    $('commute-time-controls').hidden = true;
+    if (driveSortWas) { sortBy = driveSortWas; $('f-sort').value = sortBy; driveSortWas = null; }
+    updateCommuteRadius();
+  }
+}
+
+function initIsochroneLayer() {
+  if (map.getSource('isochrone')) return;
+  map.addSource('isochrone', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({ id: 'isochrone-fill', type: 'fill', source: 'isochrone',
+    paint: { 'fill-color': '#38bdf8', 'fill-opacity': 0.16 } }, 'labels');
+  map.addLayer({ id: 'isochrone-line', type: 'line', source: 'isochrone',
+    paint: { 'line-color': '#38bdf8', 'line-width': 2, 'line-opacity': 0.9 } }, 'labels');
 }
 
 function initCommuteLayer() {
@@ -830,6 +1209,232 @@ function initCommuteLayer() {
     paint: { 'fill-color': '#ffd9a0', 'fill-opacity': 0.08 } }, 'glow');
   map.addLayer({ id: 'commute-line', type: 'line', source: 'commute-circle',
     paint: { 'line-color': '#ffd9a0', 'line-width': 2, 'line-dasharray': [4, 3], 'line-opacity': 0.6 } }, 'glow');
+}
+
+// ---------- Search along a metro line ----------
+function shortLineName(name) {
+  const text = (name || '').trim();
+  return text ? (text.split(':')[0].trim() || text) : 'Metro';
+}
+
+function formatWalk(m) {
+  if (m >= 1000) {
+    const km = m / 1000;
+    return `${Number.isInteger(km) ? km : km.toFixed(1)} km`;
+  }
+  return `${Math.round(m)} m`;
+}
+
+function metroWalkText(s) {
+  if (!crit.metroSearch) return '';
+  const hit = crit.metroSearch.nearest.get(s.id);
+  if (!hit || hit.m > crit.metroSearch.radiusM) return '';
+  return ` · ${Math.round(hit.m)} m from ${esc(hit.station)}`;
+}
+
+function metroFeatures() {
+  return transitGj?.features || [];
+}
+
+function metroLines() {
+  const seen = new Map();
+  for (const f of metroFeatures()) {
+    if (f.geometry?.type !== 'LineString') continue;
+    const name = f.properties?.line || shortLineName(f.properties?.name || f.properties?.ref);
+    if (!seen.has(name)) seen.set(name, f.properties?.colour || '#8fb4ff');
+  }
+  return [...seen].map(([name, colour]) => ({ name, colour }));
+}
+
+function lineOf(f) {
+  return f.properties?.line || (f.geometry?.type === 'LineString' ? shortLineName(f.properties?.name || f.properties?.ref) : '');
+}
+
+function stationsOn(lineName) {
+  const stops = metroFeatures().filter((f) => f.geometry?.type === 'Point' && lineOf(f) === lineName);
+  const tracks = metroFeatures().filter((f) => f.geometry?.type === 'LineString' && lineOf(f) === lineName);
+  const spine = tracks.slice().sort((a, b) => b.geometry.coordinates.length - a.geometry.coordinates.length)[0];
+  const along = (lng, lat) => {
+    if (!spine) return 0;
+    const coords = spine.geometry.coordinates;
+    let best = { d: Infinity, at: 0 }, acc = 0;
+    for (let i = 0; i < coords.length - 1; i++) {
+      const a = coords[i], b = coords[i + 1];
+      const seg = distKm(a[1], a[0], b[1], b[0]) * 1000;
+      const abx = b[0] - a[0], aby = b[1] - a[1];
+      const len2 = abx * abx + aby * aby || 1;
+      const t = Math.max(0, Math.min(1, ((lng - a[0]) * abx + (lat - a[1]) * aby) / len2));
+      const d = distKm(lat, lng, a[1] + t * aby, a[0] + t * abx) * 1000;
+      if (d < best.d) best = { d, at: acc + seg * t };
+      acc += seg;
+    }
+    return best.at;
+  };
+  return stops.map((f) => {
+    const [lng, lat] = f.geometry.coordinates;
+    return { name: f.properties?.name || 'Stop', lng, lat, colour: f.properties?.colour, at: along(lng, lat) };
+  }).sort((a, b) => a.at - b.at);
+}
+
+function nearestByLine(lineName) {
+  if (metroLineCache.has(lineName)) return metroLineCache.get(lineName);
+  const stations = stationsOn(lineName);
+  const nearest = new Map();
+  for (const s of data.societies) {
+    let best = null;
+    for (const st of stations) {
+      const m = distKm(s.lat, s.lng, st.lat, st.lng) * 1000;
+      if (!best || m < best.m) best = { m, station: st.name, lng: st.lng, lat: st.lat };
+    }
+    if (best) nearest.set(s.id, best);
+  }
+  metroLineCache.set(lineName, nearest);
+  return nearest;
+}
+
+function societyPsf(s) {
+  const keys = crit.bhk.length ? crit.bhk.map(String) : Object.keys(s.prices || {});
+  const vals = [];
+  for (const b of keys) {
+    const p = s.prices?.[b];
+    if (p?.psf && !p.flags?.buy) vals.push(p.psf);
+  }
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+}
+
+function median(nums) {
+  if (!nums.length) return null;
+  const a = [...nums].sort((x, y) => x - y);
+  const mid = Math.floor(a.length / 2);
+  return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
+}
+
+function paintMetroSearch() {
+  const line = metroLines().find((l) => l.name === metroLineName);
+  const colour = line?.colour || '#8fb4ff';
+  const tracks = metroFeatures().filter((f) => f.geometry?.type === 'LineString' && lineOf(f) === metroLineName)
+    .map((f) => ({ type: 'Feature', geometry: f.geometry, properties: { kind: 'route' } }));
+  const circles = stationsOn(metroLineName).map((st) => {
+    const circle = makeCircle([st.lng, st.lat], metroRadiusM / 1000);
+    circle.properties = { kind: 'radius' };
+    return circle;
+  });
+  if (map.getSource('metro-search')) map.getSource('metro-search').setData({ type: 'FeatureCollection', features: [...tracks, ...circles] });
+  if (map.getLayer('metro-search-fill')) {
+    map.setPaintProperty('metro-search-fill', 'fill-color', colour);
+    map.setPaintProperty('metro-search-line', 'line-color', colour);
+    map.setPaintProperty('metro-search-route', 'line-color', colour);
+  }
+}
+
+function fitMetroLine() {
+  const coords = metroFeatures()
+    .filter((f) => f.geometry?.type === 'LineString' && lineOf(f) === metroLineName)
+    .flatMap((f) => f.geometry.coordinates);
+  if (coords.length < 2) return;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of coords) {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  map.fitBounds([[minX, minY], [maxX, maxY]], { padding: { top: 70, bottom: 70, left: 480, right: 70 }, duration: 700 });
+}
+
+function updateMetroSearch({ fit = false } = {}) {
+  if (!metroSearchMode || !metroLineName) return;
+  metroRadiusM = +$('metro-radius').value || metroRadiusM;
+  $('metro-val').textContent = formatWalk(metroRadiusM);
+  const rentHead = crit.bhk.length === 1 ? `${crit.bhk[0]} BHK rent` : 'Rent';
+  $('metro-rent-h').textContent = rentHead;
+  crit.metroSearch = { radiusM: metroRadiusM, nearest: nearestByLine(metroLineName), line: metroLineName };
+  paintMetroSearch();
+  if (fit) fitMetroLine();
+  applyFilters();
+}
+
+function renderMetroTable() {
+  if (!metroSearchMode || !crit.metroSearch) return;
+  const stations = stationsOn(metroLineName);
+  const colour = metroLines().find((l) => l.name === metroLineName)?.colour || '#8fb4ff';
+  const passing = data.societies.filter((s) => matchSociety(s, crit) !== 'no');
+  const rows = stations.map((st) => {
+    const here = passing.filter((s) => distKm(s.lat, s.lng, st.lat, st.lng) * 1000 <= metroRadiusM);
+    const psf = median(here.map(societyPsf).filter((v) => v != null));
+    const rent = median(here.map((s) => priceFor(s, 'rent', crit.bhk)?.value).filter(Boolean));
+    return { ...st, n: here.length, psf, rent };
+  });
+  $('metro-rows').innerHTML = rows.map((r) => `<tr data-lng="${r.lng}" data-lat="${r.lat}">
+      <td>${esc(r.name)}</td><td>${r.n.toLocaleString()}</td>
+      <td>${r.psf ? `₹${Math.round(r.psf).toLocaleString()}` : '—'}</td>
+      <td>${r.rent ? formatINR(r.rent) : '—'}</td></tr>`).join('')
+    || '<tr><td colspan="4">No stations on this line</td></tr>';
+  $('metro-rows').querySelectorAll('tr[data-lng]').forEach((tr) => {
+    tr.onclick = () => map.flyTo({ center: [+tr.dataset.lng, +tr.dataset.lat], zoom: 14, duration: 900 });
+  });
+  const maxPsf = Math.max(1, ...rows.map((r) => r.psf || 0));
+  $('metro-chart').innerHTML = rows.map((r) => {
+    const h = r.psf ? Math.max(4, Math.round((r.psf / maxPsf) * 56)) : 2;
+    const label = (r.name || '').split(' ')[0];
+    return `<div class="metro-bar" title="${esc(r.name)}: ${r.psf ? '₹' + Math.round(r.psf).toLocaleString() + '/sq ft' : 'no price'}"><i style="height:${h}px;--bar:${colour}"></i><span>${esc(label)}</span></div>`;
+  }).join('');
+}
+
+async function openMetroSearch() {
+  if (commuteMode) closeCommute();
+  if (!layersReady()) { toast('Map is still loading.'); return; }
+  try {
+    if (!transitGj) transitGj = await loadJson(`/data/${cityId}-transit.geojson`);
+  } catch {
+    toast('No metro data for this city.');
+    return;
+  }
+  const lines = metroLines();
+  if (!lines.length) { toast('No metro lines for this city.'); return; }
+  metroSearchMode = true;
+  $('btn-metro-search').classList.add('live');
+  $('metro-panel').hidden = false;
+  $('metro-line').replaceChildren(...lines.map((l) => new Option(l.name, l.name)));
+  if (!lines.some((l) => l.name === metroLineName)) metroLineName = lines[0].name;
+  $('metro-line').value = metroLineName;
+  if (!$('dl-metro').checked) { $('dl-metro').checked = true; toggleMetro(); }
+  if (sortBy !== 'station') { metroSortWas = sortBy; sortBy = 'station'; $('f-sort').value = 'station'; }
+  updateMetroSearch({ fit: true });
+}
+
+function closeMetroSearch() {
+  if (!metroSearchMode && !crit.metroSearch) {
+    $('btn-metro-search').classList.remove('live');
+    $('metro-panel').hidden = true;
+    return;
+  }
+  metroSearchMode = false;
+  $('btn-metro-search').classList.remove('live');
+  $('metro-panel').hidden = true;
+  crit.metroSearch = null;
+  if (map.getSource('metro-search')) map.getSource('metro-search').setData({ type: 'FeatureCollection', features: [] });
+  if (metroSortWas) { sortBy = metroSortWas; $('f-sort').value = sortBy; metroSortWas = null; }
+  applyFilters();
+}
+
+function toggleMetroSearch() {
+  if (metroSearchMode) closeMetroSearch();
+  else openMetroSearch();
+}
+
+function initMetroSearchLayer() {
+  map.addSource('metro-search', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({ id: 'metro-search-fill', type: 'fill', source: 'metro-search',
+    filter: ['==', ['get', 'kind'], 'radius'],
+    paint: { 'fill-color': '#8fb4ff', 'fill-opacity': 0.12 } }, 'labels');
+  map.addLayer({ id: 'metro-search-line', type: 'line', source: 'metro-search',
+    filter: ['==', ['get', 'kind'], 'radius'],
+    paint: { 'line-color': '#8fb4ff', 'line-width': 2, 'line-dasharray': [2, 2], 'line-opacity': 0.95 } }, 'labels');
+  map.addLayer({ id: 'metro-search-route', type: 'line', source: 'metro-search',
+    filter: ['==', ['get', 'kind'], 'route'],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': '#8fb4ff', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 6, 15, 12], 'line-opacity': 0.95 } }, 'labels');
 }
 
 // ---------- Feature 2: Shortlist enhancements ----------
@@ -896,6 +1501,12 @@ function showCompare() {
       return `<div class="cv">${d != null ? `${d.toFixed(1)} km` : '—'}</div>`;
     })]);
   }
+  if (crit.commuteTime) {
+    rows.splice(6, 0, ['Drive', ...socs.map((s) => {
+      const mins = crit.commuteTime.minutes.get(s.id);
+      return `<div class="cv">${mins != null ? `${mins} min` : 'not timed'}</div>`;
+    })]);
+  }
 
   const grid = `<div class="compare-grid" style="grid-template-columns: 100px repeat(${socs.length}, 1fr)">
     ${rows.map(([label, ...cells]) => `<div class="ch">${label}</div>${cells.join('')}`).join('')}
@@ -924,6 +1535,9 @@ function initColorBy() {
     if (s.yield_src) properties.yield_src = s.yield_src;
     if (s.walk_score != null) properties.walk_score = s.walk_score;
     if (s.possession_year != null) properties.possession_year = s.possession_year;
+    if (s.liquidity_score != null) properties.liquidity_score = s.liquidity_score;
+    if (s.safety_score != null) properties.safety_score = s.safety_score;
+    if (s.noise_score != null) properties.noise_score = s.noise_score;
     features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [s.lng, s.lat] }, properties });
   }
   map.addSource('colorby-pts', { type: 'geojson', data: { type: 'FeatureCollection', features } });
@@ -941,10 +1555,12 @@ function setColorBy(mode) {
   if (mode === 'off') {
     map.setLayoutProperty('colorby', 'visibility', 'none');
     legend.hidden = true;
+    syncUrlFromFilters();
     return;
   }
   map.setLayoutProperty('colorby', 'visibility', 'visible');
   map.setFilter('colorby', mode === 'price' ? ['has', 'psf'] : null);
+  map.setPaintProperty('colorby', 'circle-radius', ['interpolate', ['linear'], ['zoom'], 9, 4, 13, 8, 16, 14]);
   legend.hidden = false;
 
   if (mode === 'price') {
@@ -995,7 +1611,50 @@ function setColorBy(mode) {
     document.querySelector('.ll-bar').style.display = 'none';
     document.querySelector('.ll-labels').style.display = 'none';
     $('ll-dots').innerHTML = '<span><i style="background:#22c55e"></i>Ready</span><span><i style="background:#f97316"></i>By 2027</span><span><i style="background:#ef4444"></i>2028+</span><span><i style="background:#94a3b8"></i>Year unknown</span>';
+  } else if (mode === 'safety') {
+    const has = data.societies.some((s) => s.safety_score != null);
+    $('ll-title').textContent = 'Safety score';
+    document.querySelector('.ll-bar').style.display = 'none';
+    document.querySelector('.ll-labels').style.display = 'none';
+    $('ll-dots').innerHTML = '<span><i style="background:#22c55e"></i>Safe, over 70</span><span><i style="background:#eab308"></i>Moderate, 40–70</span><span><i style="background:#ef4444"></i>Concern, under 40</span><span><i style="background:#94a3b8"></i>Not scored</span>'
+      + (has ? '' : '<span class="fine">No ward crime file for this city. Every society is grey. That is not a safety rating.</span>');
+    map.setFilter('colorby', null);
+    map.setPaintProperty('colorby', 'circle-radius', ['interpolate', ['linear'], ['zoom'], 9, 5, 12, 9, 15, 16]);
+    map.setPaintProperty('colorby', 'circle-color', ['case',
+      ['has', 'safety_score'],
+      ['step', ['get', 'safety_score'], '#ef4444', 40, '#eab308', 71, '#22c55e'],
+      '#94a3b8']);
+    map.setPaintProperty('colorby', 'circle-opacity', ['case', ['has', 'safety_score'], 0.9, 0.82]);
+  } else if (mode === 'liquidity' || mode === 'noise') {
+    const field = mode === 'liquidity' ? 'liquidity_score' : 'noise_score';
+    const has = data.societies.some((s) => s[field] != null);
+    if (!has) {
+      map.setLayoutProperty('colorby', 'visibility', 'none');
+      legend.hidden = true;
+      colorByMode = 'off';
+      const off = document.querySelector('input[name="colorby"][value="off"]');
+      if (off) off.checked = true;
+      toast(`No ${mode} scores on this city yet.`);
+      syncUrlFromFilters();
+      return;
+    }
+    map.setFilter('colorby', ['has', field]);
+    const ramp = mode === 'noise'
+      ? [0, '#22c55e', 40, '#eab308', 70, '#f97316', 100, '#ef4444']
+      : [0, '#ef4444', 40, '#f97316', 70, '#eab308', 100, '#22c55e'];
+    map.setPaintProperty('colorby', 'circle-color', ['interpolate', ['linear'], ['coalesce', ['get', field], 0], ...ramp]);
+    map.setPaintProperty('colorby', 'circle-opacity', 0.85);
+    $('ll-title').textContent = mode === 'liquidity' ? 'Resale liquidity' : 'Noise';
+    $('ll-dots').innerHTML = '';
+    $('ll-lo').textContent = mode === 'noise' ? 'Quieter' : 'Lower';
+    $('ll-hi').textContent = mode === 'noise' ? 'Louder' : 'Higher';
+    document.querySelector('.ll-bar').style.background = mode === 'noise'
+      ? 'linear-gradient(90deg, #22c55e, #eab308, #f97316, #ef4444)'
+      : 'linear-gradient(90deg, #ef4444, #f97316, #eab308, #22c55e)';
+    document.querySelector('.ll-bar').style.display = '';
+    document.querySelector('.ll-labels').style.display = '';
   }
+  syncUrlFromFilters();
 }
 
 function showOverlay(ids, on) {
@@ -1118,6 +1777,37 @@ function toggleAqi() {
     return;
   }
   showOverlay(['aqi-circles', 'aqi-labels'], aqiOn);
+}
+
+let noiseOn = false;
+function toggleNoise() {
+  noiseOn = $('dl-noise').checked;
+  if (!layersReady()) { noiseOn = false; $('dl-noise').checked = false; toast('Map is still loading.'); return; }
+  const ids = ['noise-flight', 'noise-flight-line', 'noise-road', 'noise-rail'];
+  if (noiseOn && !map.getSource('noise-data')) {
+    loadJson(`/data/${cityId}-noise.geojson`).then((gj) => {
+      map.addSource('noise-data', { type: 'geojson', data: gj });
+      map.addLayer({ id: 'noise-flight', type: 'fill', source: 'noise-data',
+        filter: ['==', ['get', 'type'], 'flight_path'],
+        paint: { 'fill-color': '#f97316', 'fill-opacity': 0.25 } }, 'labels');
+      map.addLayer({ id: 'noise-flight-line', type: 'line', source: 'noise-data',
+        filter: ['==', ['get', 'type'], 'flight_path'],
+        paint: { 'line-color': '#fdba74', 'line-width': 1.5, 'line-opacity': 0.8 } }, 'labels');
+      map.addLayer({ id: 'noise-road', type: 'line', source: 'noise-data',
+        filter: ['==', ['get', 'type'], 'highway'],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#fb7185', 'line-opacity': 0.85,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 10, 4, 13, 10, 16, 16] } }, 'labels');
+      map.addLayer({ id: 'noise-rail', type: 'line', source: 'noise-data',
+        filter: ['==', ['get', 'type'], 'railway'],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#fbbf24', 'line-opacity': 0.85,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2, 14, 5] } }, 'labels');
+      if (!noiseOn) showOverlay(ids, false);
+    }).catch(() => { noiseOn = false; $('dl-noise').checked = false; toast('No noise data for this city.'); });
+    return;
+  }
+  showOverlay(ids, noiseOn);
 }
 
 boot().catch((e) => { console.error(e); document.title = 'ERR ' + e.message; });

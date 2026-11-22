@@ -17,6 +17,7 @@
     <button id="btn-tour" title="Fly through the matches">Tour</button>
     <button id="btn-theme" title="Light or dark" aria-label="Switch light or dark"></button>
     <button id="btn-commute" title="Show societies within commute distance">Commute</button>
+    <button id="btn-metro-search" title="Search along a metro line">Metro</button>
     <button id="btn-compare" title="Compare selected societies">Compare</button>
     <button id="btn-log" title="Show or hide the right panel">Research log</button>
     <button id="btn-hide" title="Hide panels for recording">Hide panels</button>
@@ -94,7 +95,11 @@
     </div>
     <div class="k row">Results <select id="f-sort" aria-label="Sort results">
       <option value="best">Best match</option><option value="score">Flat Finder score</option><option value="rating">Resident rating</option>
-      <option value="price">Price, low to high</option><option value="listings">Most listings</option><option value="distance">Nearest to pin</option></select></div>
+      <option value="price">Price, low to high</option><option value="listings">Most listings</option><option value="distance">Nearest to pin</option><option value="station">Nearest to station</option>
+      <option value="liquidity">Resale liquidity</option><option value="builder">Builder track record</option>
+      <option value="trend-up">Price trend, fastest rising</option><option value="trend-stable">Price trend, most stable</option>
+      <option value="commute">Shortest drive</option></select>
+      <button class="linkbtn" id="btn-copyurl" title="Copy a link to these filters">Copy link</button></div>
     <div id="results"></div>
 
     <div class="downloads">
@@ -131,11 +136,15 @@
           <label class="sw"><input type="radio" name="colorby" value="yield"> Rental yield %</label>
           <label class="sw"><input type="radio" name="colorby" value="walkscore"> Walk score</label>
           <label class="sw"><input type="radio" name="colorby" value="supply"> Supply pipeline</label>
+          <label class="sw"><input type="radio" name="colorby" value="liquidity"> Resale liquidity</label>
+          <label class="sw"><input type="radio" name="colorby" value="safety"> Safety score</label>
+          <label class="sw"><input type="radio" name="colorby" value="noise"> Noise</label>
           <div class="k" style="font-size:11px;margin-top:8px;margin-bottom:2px">Overlays</div>
           <label class="sw"><input type="checkbox" id="dl-metro"> Metro routes</label>
           <label class="sw"><input type="checkbox" id="dl-schools"> Schools</label>
           <label class="sw"><input type="checkbox" id="dl-flood"> Rivers</label>
           <label class="sw"><input type="checkbox" id="dl-aqi"> Air quality</label>
+          <label class="sw"><input type="checkbox" id="dl-noise"> Noise zones</label>
         </div>
       </div>
       <button id="layers-btn" class="layers-btn" title="Map style" aria-label="Map style"><svg viewBox="0 0 24 24" width="16" height="16"><path d="m12 3 9 5-9 5-9-5z M3 13l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></button>
@@ -168,13 +177,42 @@
   </div>
 
   <!-- Commute radius panel -->
+  <div class="commute-panel metro-panel" id="metro-panel" hidden>
+    <div class="k row">Along the metro <button class="iconbtn" id="metro-close" aria-label="Close">×</button></div>
+    <label class="metro-line">Line
+      <select id="metro-line" aria-label="Metro line"></select>
+    </label>
+    <div class="k row"><span>Walking radius</span><span class="val" id="metro-val">1 km</span></div>
+    <input type="range" id="metro-radius" min="500" max="2000" step="100" value="1000" aria-label="Walking radius">
+    <div class="metro-table-wrap">
+      <table class="metro-table">
+        <thead><tr><th>Station</th><th>Nearby</th><th>₹/sqft</th><th id="metro-rent-h">Rent</th></tr></thead>
+        <tbody id="metro-rows"></tbody>
+      </table>
+    </div>
+    <div class="metro-chart" id="metro-chart" aria-label="Median price per sqft by station"></div>
+  </div>
+
   <div class="commute-panel" id="commute-panel" hidden>
     <div class="k row">Commute from <button class="iconbtn" id="commute-close" aria-label="Close">×</button></div>
     <div class="commute-pin-hint" id="commute-hint">Click anywhere on the map to set your workplace</div>
     <div id="commute-controls" hidden>
       <div class="commute-place" id="commute-place"></div>
-      <div class="k row"><span>Radius</span><span class="val" id="commute-val">5 km</span></div>
-      <input type="range" id="commute-range" min="1" max="20" step="0.5" value="5">
+      <div class="k row"><span>Mode</span>
+        <span class="seg small" id="commute-mode-seg">
+          <button type="button" data-cm="radius" class="on">Radius</button>
+          <button type="button" data-cm="drive">Drive</button>
+        </span>
+      </div>
+      <div id="commute-radius-controls">
+        <div class="k row"><span>Radius</span><span class="val" id="commute-val">5 km</span></div>
+        <input type="range" id="commute-range" min="1" max="20" step="0.5" value="5">
+      </div>
+      <div id="commute-time-controls" hidden>
+        <div class="k row"><span>Max drive</span><span class="val" id="commute-time-val">30 min</span></div>
+        <input type="range" id="commute-time-range" min="10" max="60" step="5" value="30" aria-label="Maximum drive time">
+        <div class="fine" id="commute-time-note">Drive time via the public OSRM router. Morning traffic is not modelled.</div>
+      </div>
       <div class="commute-stats" id="commute-stats"></div>
       <button class="linkbtn" id="commute-clear">Clear pin</button>
     </div>

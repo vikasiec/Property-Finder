@@ -315,8 +315,22 @@ body.has-card .maplibregl-ctrl-bottom-right { right: calc(var(--right-w) + var(-
 .commute-stats b { color: var(--accent); font-weight: 600; }
 .work-pin { width: 32px; height: 32px; cursor: grab; }
 .work-pin svg { width: 32px; height: 32px; filter: drop-shadow(0 2px 6px rgba(0,0,0,.5)); }
+.metro-panel { width: min(420px, calc(100vw - var(--panel-w) - 36px)); max-height: calc(100vh - 24px); overflow: auto; }
+.metro-line { display: flex; flex-direction: column; gap: 4px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.metro-line select { text-transform: none; letter-spacing: 0; font-size: 13px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--chip); color: var(--text); }
+.metro-table-wrap { overflow-x: auto; }
+.metro-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.metro-table th { text-align: left; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 500; padding: 4px 6px; white-space: nowrap; }
+.metro-table td { padding: 6px; border-top: 1px solid var(--line); white-space: nowrap; }
+.metro-table tr { cursor: pointer; }
+.metro-table tr:hover { background: var(--chip); }
+.metro-chart { display: flex; align-items: flex-end; gap: 4px; height: 84px; overflow-x: auto; padding-top: 4px; }
+.metro-bar { flex: 1 0 36px; min-width: 36px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; gap: 3px; overflow: hidden; }
+.metro-bar i { display: block; width: 100%; border-radius: 3px 3px 0 0; background: var(--bar, #8fb4ff); min-height: 2px; }
+.metro-bar span { font-size: 9px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 700px) {
   .commute-panel { left: 10px; right: 10px; width: auto; top: auto; bottom: calc(46vh + 60px); }
+  .metro-panel { max-height: 42vh; }
 }
 
 /* compare modal */
@@ -341,7 +355,70 @@ body.has-card .maplibregl-ctrl-bottom-right { right: calc(var(--right-w) + var(-
 .ll-bar { height: 10px; border-radius: 5px; }
 .ll-labels { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); }
 .ll-dots { display: flex; flex-wrap: wrap; gap: 8px; font-size: 10.5px; color: var(--muted); }
+.ll-dots .fine { flex-basis: 100%; line-height: 1.4; }
 .ll-dots i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: middle; margin-right: 3px; }
 @media (max-width: 700px) {
   .layer-legend { left: 10px; bottom: calc(46vh + 10px); width: auto; right: 60px; }
+}
+
+.liq-badge, .builder-badge, .safety-badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; margin-right: 6px; }
+.liq-high, .builder-good, .safety-good { background: #14532d; color: #86efac; }
+.liq-med, .builder-avg, .safety-moderate { background: #713f12; color: #fde68a; }
+.liq-low, .builder-poor, .safety-concern { background: #7f1d1d; color: #fecaca; }
+.noise-warn { margin-top: 4px; padding: 8px 10px; border-radius: 8px; background: #7c2d12; color: #ffedd5; font-size: 12.5px; }
+.similar-areas { margin: 8px 0 4px; }
+.similar-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.similar-chip { text-align: left; background: var(--chip); border: 1px solid var(--chip-line); border-radius: 10px; padding: 6px 8px; cursor: pointer; color: var(--text); max-width: 100%; }
+.similar-chip b { display: block; font-size: 12px; font-weight: 600; }
+.trend-chart { width: 100%; height: auto; display: block; }
+.commute-info { font-size: 12px; color: var(--muted); }
+.liquidity-row, .builder-stats, .safety-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+@media (max-width: 700px) {
+  .layers.open .layer-menu {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    bottom: calc(46vh + 52px);
+    max-height: 52vh;
+    overflow-y: auto;
+    flex-wrap: wrap;
+    z-index: 20;
+    border-radius: 12px;
+    padding: 12px;
+  }
+  .compare-grid { display: block; }
+  .compare-grid .ch { margin-top: 10px; }
+  .compare-sheet { max-height: 78vh; }
+  #q-results {
+    position: fixed;
+    left: 0;
+    right: 0;
+    max-height: 50vh;
+    border-radius: 0;
+    z-index: 30;
+  }
+  #q-results li { min-height: 44px; padding: 12px 16px; display: flex; align-items: center; }
+  .topbar {
+    max-width: calc(100vw - 12px);
+    overflow-x: auto;
+    scrollbar-width: none;
+    gap: 4px;
+    justify-content: flex-start;
+  }
+  .topbar button { flex-shrink: 0; white-space: nowrap; }
+  .chips button, .tiles button { min-height: 40px; }
+  .seg button { min-height: 36px; }
+  input[type="range"] { height: 32px; }
+  .commute-panel { max-height: 38vh; overflow-y: auto; z-index: 12; }
+  body.m-society .card::before {
+    content: '';
+    display: block;
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--text) 35%, transparent);
+    margin: 0 auto 4px;
+  }
+  .panel.left, .card { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
 }

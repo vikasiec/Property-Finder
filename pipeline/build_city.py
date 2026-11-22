@@ -17,6 +17,7 @@ import urllib.parse
 import geo
 import pricing
 import rooms_model
+import scores as society_scores
 import verified
 
 ROOT = pathlib.Path(__file__).parent
@@ -499,12 +500,19 @@ def main(city="gurgaon", max_projects=0):
         shapes.extend(f)
         events.extend(events_for(s))
 
+    noise_features = []
+    noise_src = out / "noise.geojson"
+    if noise_src.exists():
+        noise_features = json.loads(noise_src.read_text(encoding="utf-8")).get("features") or []
+    similar = society_scores.attach(
+        societies, city, {s["id"]: s.get("trend") for s in societies if s.get("trend")}, noise_features)
+
     WEB.mkdir(parents=True, exist_ok=True)
     overlays = []
     if pois:
         (WEB / f"{city}-pois.json").write_text(json.dumps(pois, separators=(",", ":")))
         overlays.append("pois")
-    for key, fname in (("transit", "transit.geojson"), ("waterways", "waterways.geojson"), ("aqi", "aqi.json")):
+    for key, fname in (("transit", "transit.geojson"), ("waterways", "waterways.geojson"), ("aqi", "aqi.json"), ("noise", "noise.geojson")):
         src = out / fname
         if src.exists():
             shutil.copy(src, WEB / f"{city}-{fname}")
@@ -517,6 +525,7 @@ def main(city="gurgaon", max_projects=0):
                        "ai_read": sum(1 for s in societies if s.get("ai_read")),
                        "for_sale": sum(s["sale_count"] or 0 for s in societies), "for_rent": sum(s["rent_count"] or 0 for s in societies),
                        "verified": sum(s["verified"] for s in societies)},
+            "similar_localities": similar,
             "sources": ["Magicbricks project pages", "OpenStreetMap contributors"] +
                        (["HRERA " + cfg["name"]] if (vdir / f"{city}-hrera.json").exists() else []) +
                        (["Builder brochures (verified rows)"] if ver else []),

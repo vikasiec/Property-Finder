@@ -169,6 +169,11 @@ export function priceFor(s, mode, bhk = []) {
   return best;
 }
 
+/** Metres from a society to its nearest station on the active metro line. */
+export function stationDistanceM(nearest, id) {
+  return nearest?.get(id)?.m ?? Infinity;
+}
+
 export function formatINR(r) {
   if (r == null) return '';
   if (r >= 1e7) return `₹${(r / 1e7).toFixed(2).replace(/\.?0+$/, '')} Cr`;

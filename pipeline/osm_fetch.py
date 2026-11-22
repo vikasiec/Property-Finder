@@ -376,6 +376,62 @@ def nominatim(query, bounded=False):
     return json.loads(urllib.request.urlopen(req, timeout=40).read())
 
 
+def short_line_name(name):
+    """'Aqua Line: Ramwadi => Vanaz' -> 'Aqua Line'."""
+    text = (name or "").strip()
+    if not text:
+        return "Metro"
+    return text.split(":")[0].strip() or text
+
+
+def _dist_to_linestring_m(pt, coords):
+    """Distance in metres from a (lng, lat) point to a line of (lng, lat) vertices."""
+    best = float("inf")
+    for a, b in zip(coords, coords[1:]):
+        lat = (a[1] + b[1]) / 2
+        ax = ay = 0.0
+        bx = (b[0] - a[0]) * geo.m_per_deg_lng(lat)
+        by = (b[1] - a[1]) * geo.M_PER_DEG_LAT
+        px = (pt[0] - a[0]) * geo.m_per_deg_lng(lat)
+        py = (pt[1] - a[1]) * geo.M_PER_DEG_LAT
+        length2 = bx * bx + by * by
+        if length2 == 0:
+            best = min(best, geo.dist_m(pt, a))
+            continue
+        t = max(0.0, min(1.0, (px * bx + py * by) / length2))
+        proj = (a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]))
+        best = min(best, geo.dist_m(pt, proj))
+    return best
+
+
+def assign_station_lines(features, metres=200):
+    """Tag each station with the metro line whose track passes within metres.
+
+    Stop points in the transit file have a colour but no line name. The route
+    name lives on the LineString, so each stop is snapped to the nearest one.
+    """
+    lines = [f for f in features if (f.get("geometry") or {}).get("type") == "LineString"]
+    for line in lines:
+        props = line.setdefault("properties", {})
+        props["line"] = short_line_name(props.get("name") or props.get("ref"))
+    for feat in features:
+        geom = feat.get("geometry") or {}
+        if geom.get("type") != "Point":
+            continue
+        coords = geom.get("coordinates") or []
+        if len(coords) < 2:
+            continue
+        pt = (coords[0], coords[1])
+        best, best_d = None, metres
+        for line in lines:
+            d = _dist_to_linestring_m(pt, line["geometry"]["coordinates"])
+            if d <= best_d:
+                best, best_d = line, d
+        if best:
+            feat.setdefault("properties", {})["line"] = best["properties"]["line"]
+    return features
+
+
 def fetch_transit():
     s, w, n, e = BBOX
     bb = f"({s},{w},{n},{e})"
@@ -411,6 +467,7 @@ def fetch_transit():
                 continue
             feats.append({"type": "Feature", "geometry": {"type": "Point", "coordinates": list(pt)},
                           "properties": {"name": (m.get("tags") or {}).get("name") or "Stop", "colour": colour, "role": "stop"}})
+    assign_station_lines(feats)
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "transit.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": feats}))
     print("transit features", len(feats))

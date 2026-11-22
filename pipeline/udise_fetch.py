@@ -30,8 +30,12 @@ HEADERS = {
 }
 DATAMEET_ZIP = "https://raw.githubusercontent.com/datameet/udise_schools/master/data/udise_schools.zip"
 # state name, district name, UDISE district code
+# state, list of (district name, UDISE district code) from the DataMeet extract
 CITY_DISTRICT = {
-    "pune": ("MAHARASHTRA", "PUNE", "2725"),
+    "pune": ("MAHARASHTRA", [("PUNE", "2725")]),
+    "mumbai": ("MAHARASHTRA", [("MUMBAI II", "2723"), ("MUMBAI (SUBURBAN)", "2722")]),
+    "bangalore": ("KARNATAKA", [("BENGALURU U SOUTH", "2920"), ("BENGALURU U NORTH", "2928"), ("BENGALURU RURAL", "2921")]),
+    "hyderabad": ("TELANGANA", [("HYDERABAD", "3622"), ("MEDCHAL", "3621"), ("RANGAREDDY", "3623")]),
 }
 BOARDS = ("CBSE", "ICSE", "ISC", "IGCSE", "IB")
 
@@ -108,7 +112,7 @@ def school_record(row, source):
     }
 
 
-def district_row(row, code, name):
+def district_row(row, code, name, state_name="MAHARASHTRA"):
     raw = row.get("udise_dtco") or row.get("udiseDistrictCode") or ""
     text = str(raw).strip()
     if text.endswith(".0"):
@@ -117,7 +121,7 @@ def district_row(row, code, name):
         return True
     dtname = str(row.get("dtname") or row.get("districtName") or "").strip().upper()
     state = str(row.get("stname") or row.get("stateName") or "").strip().upper()
-    return dtname == name and (not state or "MAHARASHTRA" in state)
+    return dtname == name and (not state or state_name.upper() in state)
 
 
 def block_code(row):
@@ -330,20 +334,30 @@ def fetch(city):
         raise SystemExit(f"unknown city {city}")
     if city not in CITY_DISTRICT:
         raise SystemExit(f"no UDISE district mapping for {city}")
-    state_name, district_name, code = CITY_DISTRICT[city]
+    state_name, districts = CITY_DISTRICT[city]
     bbox = CITIES[city]["bbox"]
     cache = CACHE / city
     cache.mkdir(parents=True, exist_ok=True)
-    state, district, blocks = fetch_kys_blocks(cache, state_name, district_name)
+    state, district, blocks = fetch_kys_blocks(cache, state_name, districts[0][0])
     rows = fetch_kys_schools(cache, state, district, blocks)
     source = "kys"
     if rows is None:
         zip_path = download(DATAMEET_ZIP, cache / "udise_schools.zip")
-        rows = [row for row in iter_datameet(zip_path, code, district_name) if district_row(row, code, district_name)]
+        rows = []
+        for district_name, code in districts:
+            rows.extend(row for row in iter_datameet(zip_path, code, district_name)
+                        if district_row(row, code, district_name, state_name))
         cache_blocks(cache, rows)
         source = "datameet"
-        print(f"datameet {district_name} rows {len(rows)}", flush=True)
-    schools = schools_in_bbox(rows, bbox, source, code, district_name)
+        print(f"datameet {[name for name, _ in districts]} rows {len(rows)}", flush=True)
+    schools = []
+    seen = set()
+    for district_name, code in districts:
+        for school in schools_in_bbox(rows, bbox, source, code, district_name):
+            if school["udise_code"] in seen:
+                continue
+            seen.add(school["udise_code"])
+            schools.append(school)
     out = OUT / city
     out.mkdir(parents=True, exist_ok=True)
     dest = out / "udise_schools.json"

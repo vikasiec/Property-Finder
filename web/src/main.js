@@ -550,7 +550,7 @@ function renderCard(s) {
   const parts = s.score_parts || {};
   const score = s.score != null ? `<div class="score"><div class="big">${s.score}<small>/10</small></div><div class="parts">
       ${parts.residents != null ? `<span>Residents <b>${parts.residents}</b></span>` : '<span class="fine">No resident ratings yet</span>'}<span>Nearby <b>${parts.nearby}</b></span><span>Amenities <b>${parts.amenities}</b></span>
-      <span class="fine">Flat Finder score: residents' rating 50%, what is nearby 30%, amenities 20%</span></div></div>` : '';
+      <span class="fine">Property Finder score: residents' rating 50%, what is nearby 30%, amenities 20%</span></div></div>` : '';
   const near = s.nearby || {};
   const nearRows = [['park', 'Park'], ['metro', 'Metro'], ['rail', 'Rail station'], ['school', 'School'], ['hospital', 'Hospital'], ['shopping', 'Mall or supermarket']]
     .filter(([k]) => near[k]).map(([k, l]) => `<div><span>${l}</span><b>${metres(near[k].m)}</b><small>${esc(near[k].name || '')}${near[k].n > 1 ? ` · ${near[k].n} within 1 km` : ''}</small></div>`).join('');
@@ -1569,6 +1569,7 @@ function setColorBy(mode) {
   if (mode === 'off') {
     map.setLayoutProperty('colorby', 'visibility', 'none');
     legend.hidden = true;
+    placeRainLegend();
     syncUrlFromFilters();
     return;
   }
@@ -1648,6 +1649,7 @@ function setColorBy(mode) {
       const off = document.querySelector('input[name="colorby"][value="off"]');
       if (off) off.checked = true;
       toast('No greenery scores for this city yet.');
+      placeRainLegend();
       syncUrlFromFilters();
       return;
     }
@@ -1672,6 +1674,7 @@ function setColorBy(mode) {
       const off = document.querySelector('input[name="colorby"][value="off"]');
       if (off) off.checked = true;
       toast(`No ${mode} scores on this city yet.`);
+      placeRainLegend();
       syncUrlFromFilters();
       return;
     }
@@ -1691,6 +1694,7 @@ function setColorBy(mode) {
     document.querySelector('.ll-bar').style.display = '';
     document.querySelector('.ll-labels').style.display = '';
   }
+  placeRainLegend();
   syncUrlFromFilters();
 }
 
@@ -1833,36 +1837,77 @@ function rainfallChart(s) {
   return `<div class="rain-section"><div class="k">Rainfall · ${s.rain_annual} mm/year · ${s.rain_monsoon_pct}% in monsoon (Jun–Sep)</div><div class="rain-chart">${bars}</div>${trend}<div class="fine">Open-Meteo 2019–2024 for this locality. Not a flood map.</div></div>`;
 }
 
+const RAIN_RAMP = ['#86efac', '#22d3ee', '#3b82f6', '#6366f1', '#7c3aed'];
+
+function rainScale(localities) {
+  const measured = Object.values(localities || {}).filter((loc) => loc.source === 'Open-Meteo' && loc.annual_avg > 0);
+  const vals = measured.map((loc) => loc.annual_avg).sort((a, b) => a - b);
+  const lo = vals[Math.floor(vals.length * 0.05)] || vals[0] || 0;
+  const hi = vals[Math.floor(vals.length * 0.95)] || (lo + 1);
+  const span = Math.max(hi - lo, 1);
+  const at = (t) => lo + span * t;
+  return {
+    lo, hi,
+    expr: ['case',
+      ['==', ['get', 'source'], 'IMD monthly normal'], '#94a3b8',
+      ['interpolate', ['linear'], ['get', 'annual'],
+        at(0), RAIN_RAMP[0], at(0.25), RAIN_RAMP[1], at(0.5), RAIN_RAMP[2], at(0.75), RAIN_RAMP[3], at(1), RAIN_RAMP[4]]],
+  };
+}
+
+function placeRainLegend() {
+  const rain = $('rain-legend');
+  if (!rain) return;
+  rain.classList.toggle('above-color', !$('layer-legend').hidden);
+}
+
+function showRainLegend(on, scale) {
+  const box = $('rain-legend');
+  if (!on || !scale) { box.hidden = true; return; }
+  $('rain-lo').textContent = `${Math.round(scale.lo)} mm`;
+  $('rain-hi').textContent = `${Math.round(scale.hi)} mm`;
+  $('rain-bar').style.background = `linear-gradient(90deg, ${RAIN_RAMP.join(', ')})`;
+  $('rain-note').textContent = 'Compared within this city, 2019–2024. Grey is a missing cell, not a drier place.';
+  box.hidden = false;
+  placeRainLegend();
+}
+
 let rainOn = false;
+let rainScaleCache = null;
 function toggleRain() {
   rainOn = $('dl-rain').checked;
   if (!layersReady()) { rainOn = false; $('dl-rain').checked = false; toast('Map is still loading.'); return; }
   const ids = ['rain-circles', 'rain-labels'];
-  if (rainOn && !map.getSource('rain-data')) {
+  if (!rainOn) { showOverlay(ids, false); showRainLegend(false); return; }
+  if (!map.getSource('rain-data')) {
     loadJson(`/data/${cityId}-rainfall.json`).then((rain) => {
+      const scale = rainScale(rain.localities);
+      rainScaleCache = scale;
       const features = Object.entries(rain.localities || {}).map(([name, loc]) => ({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [loc.lng, loc.lat] },
-        properties: { name, annual: loc.annual_avg, monsoon_pct: loc.monsoon_pct },
+        properties: { name, annual: loc.annual_avg, monsoon_pct: loc.monsoon_pct, source: loc.source || '' },
       }));
       map.addSource('rain-data', { type: 'geojson', data: { type: 'FeatureCollection', features } });
       map.addLayer({ id: 'rain-circles', type: 'circle', source: 'rain-data',
         paint: {
           'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 12, 14, 24],
-          'circle-color': ['interpolate', ['linear'], ['get', 'annual'], 400, '#93c5fd', 700, '#3b82f6', 1000, '#6366f1', 1500, '#7c3aed'],
-          'circle-opacity': 0.5,
+          'circle-color': scale.expr,
+          'circle-opacity': 0.72,
           'circle-stroke-width': 1,
           'circle-stroke-color': '#fff',
-          'circle-stroke-opacity': 0.3,
+          'circle-stroke-opacity': 0.35,
         } }, 'labels');
       map.addLayer({ id: 'rain-labels', type: 'symbol', source: 'rain-data',
         layout: { 'text-field': ['concat', ['to-string', ['round', ['get', 'annual']]], ' mm'], 'text-size': 10, 'text-font': LABEL_FONT },
         paint: { 'text-color': '#e0e7ff', 'text-halo-color': '#0b0b0c', 'text-halo-width': 1.5 } }, 'labels');
-      if (!rainOn) showOverlay(ids, false);
-    }).catch(() => { rainOn = false; $('dl-rain').checked = false; toast('No rainfall data for this city.'); });
+      if (!rainOn) { showOverlay(ids, false); showRainLegend(false); return; }
+      showRainLegend(true, scale);
+    }).catch(() => { rainOn = false; $('dl-rain').checked = false; showRainLegend(false); toast('No rainfall data for this city.'); });
     return;
   }
-  showOverlay(ids, rainOn);
+  showOverlay(ids, true);
+  showRainLegend(true, rainScaleCache);
 }
 
 let greenOn = false;

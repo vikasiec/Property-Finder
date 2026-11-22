@@ -4,7 +4,7 @@
 
 **Goal:** Every residential society in Gurgaon on a cinematic night map, filterable by anyone's criteria, with Divy's verified research as the example.
 
-**Architecture:** Python pipeline (crawl, parse, merge) writes static files into `web/public/data/`. A Vite + MapLibre static site reads them and filters in the browser. Hosted on Cloudflare Pages from GitHub `kairothq/flat-finder`.
+**Architecture:** Python pipeline (crawl, parse, merge) writes static files into `web/public/data/`. A Vite + MapLibre static site reads them and filters in the browser. Hosted on Cloudflare Pages from GitHub `vikasiec/flat-finder`.
 
 **Tech Stack:** Python 3.9 stdlib + pytest (pipeline), Vite, maplibre-gl 5.6.0, vitest (web).
 
@@ -78,7 +78,7 @@
 
 ### Task 5: Ship
 
-- [ ] Create `kairothq/flat-finder` (public), push, deploy to Cloudflare Pages (`wrangler pages deploy web/dist`). Confirm with Divy before pushing and deploying.
+- [ ] Create `vikasiec/flat-finder` (public), push, deploy to Cloudflare Pages (`wrangler pages deploy web/dist`). Confirm with Divy before pushing and deploying.
 - [ ] README: what it is, data sources, how to add a city.
 
 Skill and CLI follow in plan v2, once v1 data and site are live.

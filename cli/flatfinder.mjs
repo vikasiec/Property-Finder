@@ -11,7 +11,7 @@ const SITE = 'https://flat-finder.pages.dev';
 
 const HELP = `flatfinder: find housing societies that fit
 
-  npx github:kairothq/flat-finder [options]
+  npx github:vikasiec/flat-finder [options]
 
   --city <id>            gurgaon (default), more as they are added
   --bhk 3,4              BHK types

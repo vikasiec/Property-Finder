@@ -6,5 +6,5 @@
   "bin": { "flatfinder": "cli/flatfinder.mjs" },
   "files": ["cli", "web/src/filters.js"],
   "license": "MIT",
-  "repository": "github:kairothq/flat-finder"
+  "repository": "github:vikasiec/flat-finder"
 }

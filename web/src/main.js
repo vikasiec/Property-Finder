@@ -3,7 +3,7 @@ import maplibregl from 'maplibre-gl';
 import { addBaseLayers, addSocietyLayers, BASE_MODES, createMap, OVERVIEW, setBaseMode, setHighlights, setSelected, setStates, startPulse } from './map.js';
 import { searchSocieties } from './search.js';
 import { createFeed } from './feed.js';
-import { AMENITY_KEYS, DEFAULT_CRITERIA, NEAR, RANK, feetLabel, formatINR, matchSociety, matchUnit, priceFor, roomPasses, stationDistanceM } from './filters.js';
+import { AMENITY_KEYS, DEFAULT_CRITERIA, NEAR, PRI_KEYS, RANK, feetLabel, formatINR, matchSociety, matchUnit, passesPriorities, priceFor, priorityContext, priorityScore, roomPasses, stationDistanceM } from './filters.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -27,6 +27,9 @@ const STATE_LABEL = { match: 'Matches your search', likely: 'Likely match', prob
 let crit = structuredClone(DEFAULT_CRITERIA);
 let baseMode = BASE_MODES.includes(params.get('map')) ? params.get('map') : 'streets';
 let roomMode = 'off', areaUnit = 'gaj', sortBy = 'best';
+const DEFAULT_WEIGHTS = { price: 5, green: 3, safety: 5, quiet: 3, liquidity: 4, walk: 3, builder: 3 };
+let weights = { ...DEFAULT_WEIGHTS, ...(store.get('pf-weights', {}) || {}) };
+let _priCtx = null;
 
 function parsePriceToken(raw) {
   if (!raw) return null;
@@ -89,8 +92,10 @@ function readFiltersFromUrl() {
     const kinds = p.get('kind').split(',').filter(Boolean);
     if (kinds.length) crit.kinds = kinds;
   }
-  const sorts = ['best', 'score', 'rating', 'price', 'listings', 'distance', 'station', 'liquidity', 'builder', 'trend-up', 'trend-stable', 'commute', 'rain-low', 'greenery'];
+  const sorts = ['best', 'decision', 'score', 'rating', 'price', 'listings', 'distance', 'station', 'liquidity', 'builder', 'trend-up', 'trend-stable', 'commute', 'rain-low', 'greenery'];
   if (sorts.includes(p.get('sort'))) sortBy = p.get('sort');
+  const fromUrl = readWeightToken(p.get('pri'));
+  if (fromUrl) weights = fromUrl;
   const colours = ['off', 'price', 'yield', 'walkscore', 'supply', 'liquidity', 'safety', 'noise', 'greenery'];
   if (colours.includes(p.get('colorby'))) colorByMode = p.get('colorby');
   wantGreen = p.get('green') === '1';
@@ -119,6 +124,8 @@ function syncUrlFromFilters() {
   if (sortBy !== 'best') p.set('sort', sortBy);
   if (colorByMode !== 'off') p.set('colorby', colorByMode);
   if ($('dl-green')?.checked) p.set('green', '1');
+  const pri = weightToken(weights);
+  if (pri !== weightToken(DEFAULT_WEIGHTS)) p.set('pri', pri);
   if (baseMode !== 'streets') p.set('map', baseMode);
   if (selected) p.set('open', selected);
   const next = `${location.pathname}?${p.toString()}`;
@@ -361,6 +368,69 @@ function buildFilters() {
   $('btn-hide').onclick = () => document.body.classList.toggle('bare');
   $('btn-log').onclick = () => toggleLog();
   $('log-close').onclick = () => toggleLog(false);
+  $('btn-overflow').onclick = () => {
+    const menu = $('overflow-menu');
+    menu.hidden = !menu.hidden;
+  };
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.topbar-overflow')) $('overflow-menu').hidden = true;
+  });
+  $('overflow-menu').addEventListener('click', (e) => {
+    if (e.target.closest('button')) $('overflow-menu').hidden = true;
+  });
+  $('btn-localities').onclick = () => { $('locality-modal').hidden = false; renderLocalityDashboard(); };
+  $('locality-close').onclick = () => { $('locality-modal').hidden = true; };
+  $('loc-sort').onchange = renderLocalityDashboard;
+  $('loc-search').oninput = renderLocalityDashboard;
+  $('loc-rows').addEventListener('click', (e) => {
+    const link = e.target.closest('.loc-link');
+    if (!link) return;
+    e.preventDefault();
+    $('q').value = link.dataset.loc;
+    $('locality-modal').hidden = true;
+    setQuery(link.dataset.loc);
+    if (mobile) showMobile('search');
+  });
+  let priTimer = null;
+  const priTitle = (key, value) => {
+    const ctx = priCtx();
+    if (!ctx.has[key]) return 'This city has no data for this, so the slider is skipped.';
+    const n = +value;
+    if (!n) return 'Not filtering';
+    if (key === 'price') return `Hide dearer projects. Bar ${n * 10}: 100 is the cheap end of this city.`;
+    return `Hide projects under ${n * 10}.`;
+  };
+  const paintPri = (input) => {
+    input.parentElement.querySelector('.pri-val').textContent = input.value;
+    input.title = priTitle(input.dataset.pri, input.value);
+  };
+  const commitWeights = () => {
+    store.set('pf-weights', weights);
+    applyFilters();
+  };
+  document.querySelectorAll('[data-pri]').forEach((input) => {
+    input.value = weights[input.dataset.pri] ?? DEFAULT_WEIGHTS[input.dataset.pri];
+    paintPri(input);
+    input.addEventListener('pointerdown', (e) => {
+      if (e.pointerId != null) input.setPointerCapture(e.pointerId);
+    });
+    input.addEventListener('input', () => {
+      weights[input.dataset.pri] = +input.value;
+      paintPri(input);
+      clearTimeout(priTimer);
+      priTimer = setTimeout(commitWeights, 80);
+    });
+    input.addEventListener('change', () => { clearTimeout(priTimer); commitWeights(); });
+  });
+  $('pri-reset').onclick = () => {
+    weights = { ...DEFAULT_WEIGHTS };
+    store.set('pf-weights', weights);
+    document.querySelectorAll('[data-pri]').forEach((input) => {
+      input.value = weights[input.dataset.pri];
+      paintPri(input);
+    });
+    applyFilters();
+  };
   redrawFilters();
 }
 
@@ -372,7 +442,13 @@ function toggleLog(show = document.body.classList.contains('nolog')) {
 
 // ---------- apply and results ----------
 let waveTimer = null;
+function priCtx() {
+  if (!_priCtx) _priCtx = priorityContext(data.societies);
+  return _priCtx;
+}
+
 function applyFilters(wave = false) {
+  const bars = priCtx();
   const next = new Map(data.societies.map((s) => {
     let st = matchSociety(s, crit);
     if (st !== 'no' && crit.commuteDist) {
@@ -387,6 +463,7 @@ function applyFilters(wave = false) {
       const m = stationDistanceM(crit.metroSearch.nearest, s.id);
       if (m > crit.metroSearch.radiusM) st = 'no';
     }
+    if (st !== 'no' && !passesPriorities(s, weights, bars)) st = 'no';
     return [s.id, st];
   }));
   const changed = [...next].filter(([id, st]) => states.get(id) !== st);
@@ -424,6 +501,7 @@ function sorted(list) {
     commute: (a, b) => (crit.commuteTime?.minutes.get(a.id) ?? 9999) - (crit.commuteTime?.minutes.get(b.id) ?? 9999),
     'rain-low': (a, b) => (a.rain_annual ?? 9999) - (b.rain_annual ?? 9999),
     greenery: (a, b) => (b.green_score ?? -1) - (a.green_score ?? -1),
+    decision: (a, b) => (decisionScore(b) ?? -1) - (decisionScore(a) ?? -1),
   }[sortBy];
   return list.sort(by);
 }
@@ -471,7 +549,7 @@ function resultItem(s) {
   const distText = crit.commuteDist ? (() => { const d = crit.commuteDist.distances.get(s.id); return d != null ? ` · ${d.toFixed(1)} km` : ''; })()
     : driveMin != null ? ` · ${driveMin} min drive` : metroWalkText(s);
   const cmpCheck = compareMode ? `<span class="cmp-check ${compareList.includes(s.id) ? 'on' : ''}" data-cmp="${s.id}">✓</span>` : '';
-  li.innerHTML = `${cmpCheck}<span class="nm">${myList.includes(s.id) ? '★ ' : ''}${esc(s.name)}<small>${esc(s.locality || '')}${how}${distText}</small></span>
+  li.innerHTML = `${cmpCheck}${decisionBadge(decisionScore(s))}<span class="nm">${myList.includes(s.id) ? '★ ' : ''}${esc(s.name)}<small>${esc(s.locality || '')}${how}${distText}</small></span>
     <span class="tag ${st}">${money}${s.score != null ? `<small>score ${s.score}</small>` : ''}</span>`;
   li.onclick = (e) => {
     if (e.target.closest('.cmp-check')) { toggleCompareItem(s.id); return; }
@@ -480,10 +558,13 @@ function resultItem(s) {
   return li;
 }
 
+let countAnim = 0;
 function animateNumber(el, to) {
+  const token = ++countAnim;
   const from = +el.textContent.replace(/,/g, '') || 0;
   const t0 = performance.now();
   const step = (t) => {
+    if (token !== countAnim) return;
     const k = Math.max(0, Math.min(1, (t - t0) / 700));
     el.textContent = Math.round(from + (to - from) * (1 - (1 - k) ** 3)).toLocaleString();
     if (k < 1) requestAnimationFrame(step);
@@ -570,8 +651,13 @@ function renderCard(s) {
     <div class="meta">${esc(s.developer || '')}${s.locality ? ' · ' + esc(s.locality) : ''} · ${esc(s.config_text || s.kind)}${s.kind_inferred ? ' <span class="fine">(type inferred from name)</span>' : ''}${s.locality ? ` <button type="button" class="linkbtn" id="similar-open">Similar areas</button>` : ''}</div>
     ${metroWalkText(s) ? `<div class="meta">${metroWalkText(s).replace(/^ · /, '')}</div>` : ''}
     <div class="meta">${esc(facts2)}</div>
+    ${scoreRow(s)}
     ${score}
-    ${signalRows(s)}
+    <details class="card-details">
+      <summary>Show details</summary>
+      ${signalRows(s)}
+      ${rainfallChart(s)}
+    </details>
     <div class="meta">${s.rating ? `<span class="stars">★ ${s.rating.toFixed(1)}</span> ${s.rating_count || 0} resident ratings · ${s.review_count || 0} reviews · ` : ''}${counts}</div>
     ${s.note ? `<div class="fine">${esc(s.note)}</div>` : ''}
     <h4>Buy and rent</h4>
@@ -580,7 +666,6 @@ function renderCard(s) {
     <h4>Bedrooms</h4>
     ${unitRows ? `<table><tr><th>Unit</th><th>Bedrooms</th><th></th><th>Source</th></tr>${unitRows}</table>` : '<div class="fine">No unit types listed.</div>'}
     ${nearRows ? `<h4>Nearby</h4><div class="near">${nearRows}</div>` : ''}
-    ${rainfallChart(s)}
     ${ratingBars ? `<h4>What residents rate</h4>${ratingBars}` : ''}${reviews}
     ${facts || amen ? `<h4>Amenities (${s.amenities.length})</h4><div class="amen">${facts}${amen}</div>` : ''}
     ${about}
@@ -633,6 +718,191 @@ function renderTrendChart(trend) {
   const xIdx = [0, Math.floor(dates.length / 2), dates.length - 1];
   const xLabels = xIdx.map((i) => `<text x="${scaleX(i)}" y="${height - 6}" text-anchor="middle" font-size="9" fill="#999">${esc(dates[i])}</text>`).join('');
   return `<svg width="${width}" height="${height}" class="trend-chart" viewBox="0 0 ${width} ${height}"><path d="${path}" fill="none" stroke="#7dd3fc" stroke-width="2"/>${vals.map((v, i) => `<circle cx="${scaleX(i)}" cy="${scaleY(v)}" r="2.5" fill="#7dd3fc"/>`).join('')}${yLabels}${xLabels}</svg>`;
+}
+
+function weightToken(w) {
+  return PRI_KEYS.map((k) => w[k] ?? 0).join(',');
+}
+
+function readWeightToken(raw) {
+  if (!raw) return null;
+  const parts = raw.split(',');
+  if (parts.length !== PRI_KEYS.length) return null;
+  const next = {};
+  for (let i = 0; i < PRI_KEYS.length; i++) {
+    const n = Number(parts[i]);
+    if (!Number.isFinite(n)) return null;
+    next[PRI_KEYS[i]] = Math.max(0, Math.min(10, Math.round(n)));
+  }
+  return next;
+}
+
+function decisionScore(s) {
+  const ctx = priCtx();
+  const components = [];
+  for (const key of PRI_KEYS) {
+    if (!(weights[key] > 0)) continue;
+    const score = priorityScore(s, key, ctx);
+    if (score == null) continue;
+    components.push({ score, weight: weights[key] });
+  }
+  if (!components.length) return null;
+  const totalWeight = components.reduce((sum, c) => sum + c.weight, 0);
+  return Math.round(components.reduce((sum, c) => sum + c.score * c.weight, 0) / totalWeight);
+}
+
+function decisionBadge(score) {
+  if (score == null) return '';
+  const color = score >= 75 ? '#22c55e' : score >= 50 ? '#eab308' : '#ef4444';
+  return `<span class="decision-badge" style="background:${color}" title="My priorities score">${score}</span>`;
+}
+
+function pill(value, label, color) {
+  const shown = typeof value === 'number' && value > 999 ? Math.round(value) : value;
+  return `<div class="score-pill" title="${esc(label)}: ${esc(shown)}"><i style="background:${color}"></i><span class="pill-val">${esc(shown)}</span><span class="pill-label">${esc(label)}</span></div>`;
+}
+
+function scoreRow(s) {
+  const pills = [];
+  const fit = decisionScore(s);
+  if (fit != null) pills.push(decisionBadge(fit));
+  if (s.green_score != null) pills.push(pill(s.green_score, s.green_label || 'Greenery', '#22c55e'));
+  if (s.safety_score != null) pills.push(pill(s.safety_score, s.safety_score > 70 ? 'Safe' : s.safety_score >= 40 ? 'Moderate' : 'Concern',
+    s.safety_score > 70 ? '#22c55e' : s.safety_score >= 40 ? '#eab308' : '#ef4444'));
+  if (s.noise_score != null) pills.push(pill(s.noise_score, s.noise_score > 50 ? 'Noisy' : 'Quiet', s.noise_score > 50 ? '#f97316' : '#22c55e'));
+  if (s.liquidity_score != null) pills.push(pill(s.liquidity_score, s.liquidity_score >= 70 ? 'High' : s.liquidity_score >= 40 ? 'Medium' : 'Low',
+    s.liquidity_score >= 70 ? '#22c55e' : s.liquidity_score >= 40 ? '#eab308' : '#ef4444'));
+  if (s.rain_annual != null) pills.push(pill(s.rain_annual, 'mm/yr', '#3b82f6'));
+  if (s.walk_score != null) pills.push(pill(s.walk_score, 'Walk score', '#84cc16'));
+  if (!pills.length) return '';
+  return `<div class="score-pills">${pills.join('')}</div>`;
+}
+
+let localityRows = null;
+function avg(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
+
+function buildLocalityDashboard() {
+  if (localityRows) return localityRows;
+  const locs = {};
+  for (const s of data.societies) {
+    const loc = (s.locality || '').trim();
+    if (!loc) continue;
+    if (!locs[loc]) locs[loc] = { name: loc, count: 0, prices: [], green: [], safety: [], noise: [], liquidity: [], rain: [], walk: [] };
+    const L = locs[loc];
+    L.count++;
+    if (s.psf_now) L.prices.push(s.psf_now);
+    if (s.green_score != null) L.green.push(s.green_score);
+    if (s.safety_score != null) L.safety.push(s.safety_score);
+    if (s.noise_score != null) L.noise.push(s.noise_score);
+    if (s.liquidity_score != null) L.liquidity.push(s.liquidity_score);
+    if (s.rain_annual != null) L.rain.push(s.rain_annual);
+    if (s.walk_score != null) L.walk.push(s.walk_score);
+  }
+  localityRows = Object.values(locs).map((L) => ({
+    name: L.name,
+    count: L.count,
+    avg_price: L.prices.length ? Math.round(avg(L.prices)) : null,
+    avg_green: L.green.length ? Math.round(avg(L.green)) : null,
+    avg_safety: L.safety.length ? Math.round(avg(L.safety)) : null,
+    avg_noise: L.noise.length ? Math.round(avg(L.noise)) : null,
+    avg_liquidity: L.liquidity.length ? Math.round(avg(L.liquidity)) : null,
+    avg_rain: L.rain.length ? Math.round(avg(L.rain)) : null,
+    avg_walk: L.walk.length ? Math.round(avg(L.walk)) : null,
+  }));
+  return localityRows;
+}
+
+function scoreCell(val, good, mid, invert = false) {
+  if (val == null) return '—';
+  let cls;
+  if (invert) cls = val <= mid ? 'cell-good' : val <= good ? 'cell-mid' : 'cell-bad';
+  else cls = val >= good ? 'cell-good' : val >= mid ? 'cell-mid' : 'cell-bad';
+  return `<span class="${cls}">${val}</span>`;
+}
+
+function renderLocalityDashboard() {
+  const rows = buildLocalityDashboard().slice();
+  const sortKey = $('loc-sort').value;
+  const sorters = {
+    count: (a, b) => b.count - a.count,
+    'price-low': (a, b) => (a.avg_price ?? 9e9) - (b.avg_price ?? 9e9),
+    'price-high': (a, b) => (b.avg_price ?? 0) - (a.avg_price ?? 0),
+    green: (a, b) => (b.avg_green ?? -1) - (a.avg_green ?? -1),
+    safe: (a, b) => (b.avg_safety ?? -1) - (a.avg_safety ?? -1),
+    quiet: (a, b) => (a.avg_noise ?? 999) - (b.avg_noise ?? 999),
+    liquid: (a, b) => (b.avg_liquidity ?? -1) - (a.avg_liquidity ?? -1),
+    'rain-low': (a, b) => (a.avg_rain ?? 9999) - (b.avg_rain ?? 9999),
+  };
+  rows.sort(sorters[sortKey] || sorters.count);
+  const filter = ($('loc-search').value || '').toLowerCase();
+  const filtered = filter ? rows.filter((r) => r.name.toLowerCase().includes(filter)) : rows;
+  $('loc-rows').innerHTML = filtered.map((r) => `<tr>
+    <td><a class="loc-link" href="#" data-loc="${esc(r.name)}">${esc(r.name)}</a></td>
+    <td>${r.count}</td>
+    <td>${r.avg_price != null ? '₹' + r.avg_price.toLocaleString() : '—'}</td>
+    <td>${scoreCell(r.avg_green, 75, 50)}</td>
+    <td>${scoreCell(r.avg_safety, 70, 40)}</td>
+    <td>${scoreCell(r.avg_noise, 999, 50, true)}</td>
+    <td>${scoreCell(r.avg_liquidity, 70, 40)}</td>
+    <td>${r.avg_rain != null ? r.avg_rain : '—'}</td>
+    <td>${scoreCell(r.avg_walk, 75, 50)}</td>
+  </tr>`).join('');
+}
+
+const RADAR_AXES = [
+  { key: 'green_score', label: 'Greenery', max: 100 },
+  { key: 'safety_score', label: 'Safety', max: 100 },
+  { key: 'noise_inv', label: 'Quiet', max: 100 },
+  { key: 'liquidity_score', label: 'Liquidity', max: 100 },
+  { key: 'walk_score', label: 'Walkability', max: 100 },
+  { key: 'score', label: 'Rating', max: 10 },
+];
+const RADAR_COLORS = ['#3b82f6', '#f97316', '#22c55e', '#a855f7'];
+
+function radarChart(societies) {
+  const axes = RADAR_AXES.filter((axis) => societies.some((s) => {
+    if (axis.key === 'noise_inv') return s.noise_score != null;
+    return s[axis.key] != null;
+  }));
+  if (axes.length < 3) return '';
+  const n = axes.length;
+  const size = 260, cx = size / 2, cy = size / 2, r = 88;
+  const angleStep = (2 * Math.PI) / n;
+  let svg = `<svg viewBox="0 0 ${size} ${size}" class="radar-svg">`;
+  for (const frac of [0.25, 0.5, 0.75, 1]) {
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      const a = -Math.PI / 2 + i * angleStep;
+      pts.push(`${cx + r * frac * Math.cos(a)},${cy + r * frac * Math.sin(a)}`);
+    }
+    svg += `<polygon points="${pts.join(' ')}" fill="none" stroke="var(--line)" stroke-width="0.5"/>`;
+  }
+  for (let i = 0; i < n; i++) {
+    const a = -Math.PI / 2 + i * angleStep;
+    const x2 = cx + r * Math.cos(a), y2 = cy + r * Math.sin(a);
+    svg += `<line x1="${cx}" y1="${cy}" x2="${x2}" y2="${y2}" stroke="var(--line)" stroke-width="0.5"/>`;
+    const lx = cx + (r + 16) * Math.cos(a), ly = cy + (r + 16) * Math.sin(a);
+    svg += `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="central" fill="var(--muted)" font-size="9">${esc(axes[i].label)}</text>`;
+  }
+  societies.forEach((s, si) => {
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      const axis = axes[i];
+      let val = axis.key === 'noise_inv'
+        ? (s.noise_score != null ? 100 - s.noise_score : 50)
+        : (s[axis.key] ?? 0);
+      val = axis.key === 'score' ? (val / axis.max) * 100 : Math.min(val / axis.max * 100, 100);
+      const frac = val / 100;
+      const a = -Math.PI / 2 + i * angleStep;
+      pts.push(`${cx + r * frac * Math.cos(a)},${cy + r * frac * Math.sin(a)}`);
+    }
+    const color = RADAR_COLORS[si % RADAR_COLORS.length];
+    svg += `<polygon points="${pts.join(' ')}" fill="${color}" fill-opacity="0.15" stroke="${color}" stroke-width="1.5"/>`;
+  });
+  svg += '</svg>';
+  const legend = societies.map((s, i) =>
+    `<span class="radar-legend-item"><i style="background:${RADAR_COLORS[i % RADAR_COLORS.length]}"></i>${esc(s.name)}</span>`).join('');
+  return `<div class="radar-wrap">${svg}<div class="radar-legend">${legend}</div></div>`;
 }
 
 function signalRows(s) {
@@ -907,7 +1177,11 @@ function buildSearch() {
     const rows = items.map((s, i) => {
       const li = document.createElement('li');
       li.className = i === active ? 'on' : '';
-      li.innerHTML = `<span>${esc(s.name)}</span><span class="tag ${states.get(s.id)}">${esc(s.locality || '')}${s.verified ? ' · verified' : ''}</span><button class="iconbtn star ${myList.includes(s.id) ? 'on' : ''}" title="Add to my list">${myList.includes(s.id) ? '★' : '☆'}</button>`;
+      const price = s.psf_now ? `₹${Math.round(s.psf_now).toLocaleString()}/sqft` : '';
+      const green = s.green_score != null ? `🌳${s.green_score}` : '';
+      const safety = s.safety_score != null ? `🛡${s.safety_score}` : '';
+      const meta = [price, green, safety].filter(Boolean).join(' · ');
+      li.innerHTML = `<div class="sr-body"><div class="sr-name">${esc(s.name)}</div><div class="sr-meta">${esc(s.locality || '')}${meta ? ' · ' + meta : ''}${s.verified ? ' · verified' : ''}</div></div><button class="iconbtn star ${myList.includes(s.id) ? 'on' : ''}" title="Add to my list">${myList.includes(s.id) ? '★' : '☆'}</button>`;
       li.onmousedown = (e) => {
         e.preventDefault();
         if (e.target.closest('.star')) { toggle(myList, s.id); saveList(); renderResults(); render(); return; }
@@ -966,7 +1240,7 @@ function stopTour() {
   touring = false;
   clearTimeout(tourTimer);
   map?.stop();
-  $('btn-tour').textContent = 'Tour';
+  $('btn-tour').textContent = 'Fly through matches';
   $('btn-tour').classList.remove('live');
 }
 
@@ -986,7 +1260,14 @@ function tour() {
   };
   next();
 }
-addEventListener('keydown', (e) => { if (e.key === 'Escape') { stopTour(); closeMetroSearch(); closeCommute(); closeCompare(); } });
+addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  stopTour(); closeMetroSearch(); closeCommute(); closeCompare();
+  const loc = $('locality-modal');
+  if (loc) loc.hidden = true;
+  const menu = $('overflow-menu');
+  if (menu) menu.hidden = true;
+});
 
 // ---------- Feature 1: Commute Radius ----------
 function distKm(lat1, lng1, lat2, lng2) {
@@ -1524,7 +1805,7 @@ function showCompare() {
   const grid = `<div class="compare-grid" style="grid-template-columns: 100px repeat(${socs.length}, 1fr)">
     ${rows.map(([label, ...cells]) => `<div class="ch">${label}</div>${cells.join('')}`).join('')}
   </div>`;
-  $('compare-body').innerHTML = grid;
+  $('compare-body').innerHTML = radarChart(socs) + grid;
   $('compare-modal').hidden = false;
 }
 

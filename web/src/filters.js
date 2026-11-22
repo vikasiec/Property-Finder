@@ -174,6 +174,62 @@ export function stationDistanceM(nearest, id) {
   return nearest?.get(id)?.m ?? Infinity;
 }
 
+// My Priorities. A slider of 0 ignores that bar. 1–10 requires a 0–100 component score of at least slider × 10.
+export const PRI_KEYS = ['price', 'green', 'safety', 'quiet', 'liquidity', 'walk', 'builder'];
+
+function percentile(sorted, p) {
+  if (!sorted.length) return 0;
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))] || 0;
+}
+
+/** Which bars this city can enforce, plus the price band (5th–95th ₹/sqft) used to score cheapness. */
+export function priorityContext(societies) {
+  const psf = [];
+  const has = { price: false, green: false, safety: false, quiet: false, liquidity: false, walk: false, builder: false };
+  for (const s of societies || []) {
+    if (s.psf_now) { has.price = true; psf.push(s.psf_now); }
+    if (s.green_score != null) has.green = true;
+    if (s.safety_score != null) has.safety = true;
+    if (s.noise_score != null) has.quiet = true;
+    if (s.liquidity_score != null) has.liquidity = true;
+    if (s.walk_score != null) has.walk = true;
+    if (s.builder_record?.delivery_pct != null) has.builder = true;
+  }
+  psf.sort((a, b) => a - b);
+  return {
+    has,
+    priceRange: psf.length ? { min: percentile(psf, 0.05), max: percentile(psf, 0.95) || 1 } : null,
+  };
+}
+
+/** 0–100 fit for one bar, or null when this project has no number for it. Price is inverted: 100 is the cheap end. */
+export function priorityScore(s, key, ctx) {
+  if (key === 'price') {
+    if (!s.psf_now || !ctx?.priceRange) return null;
+    const span = ctx.priceRange.max - ctx.priceRange.min || 1;
+    return Math.max(0, Math.min(100, 100 - ((s.psf_now - ctx.priceRange.min) / span) * 100));
+  }
+  if (key === 'green') return s.green_score ?? null;
+  if (key === 'safety') return s.safety_score ?? null;
+  if (key === 'quiet') return s.noise_score == null ? null : 100 - s.noise_score;
+  if (key === 'liquidity') return s.liquidity_score ?? null;
+  if (key === 'walk') return s.walk_score ?? null;
+  if (key === 'builder') return s.builder_record?.delivery_pct ?? null;
+  return null;
+}
+
+/** False when a raised slider is above this project's score. A bar the city has no data for is skipped. */
+export function passesPriorities(s, weights, ctx) {
+  if (!weights || !ctx) return true;
+  for (const key of PRI_KEYS) {
+    const w = weights[key] || 0;
+    if (w <= 0 || !ctx.has?.[key]) continue;
+    const score = priorityScore(s, key, ctx);
+    if (score == null || score < w * 10) return false;
+  }
+  return true;
+}
+
 export function formatINR(r) {
   if (r == null) return '';
   if (r >= 1e7) return `₹${(r / 1e7).toFixed(2).replace(/\.?0+$/, '')} Cr`;

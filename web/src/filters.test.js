@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CRITERIA, feetLabel, matchSociety, roomPasses } from './filters.js';
+import { DEFAULT_CRITERIA, feetLabel, matchSociety, passesPriorities, priorityContext, roomPasses } from './filters.js';
 
 const ROOM = { a: 11.25, b: 12.25 }; // 11'3" x 12'3"
 const soc = (over = {}) => ({ kind: 'apartment', status: 'Ready To Move', amenities: [], amen_facts: {}, unit_types: [], ...over });
@@ -136,5 +136,39 @@ describe('flagged prices', () => {
     const { priceFor } = await import('./filters.js');
     const s = { prices: { 3: { rent: { median: 960000, n: 1 }, rent_est: { value: 90100, basis: 'yield' }, flags: { rent: 'typo' } } } };
     expect(priceFor(s, 'rent', [3])).toMatchObject({ value: 90100, estimated: true });
+  });
+});
+
+describe('priority sliders', () => {
+  const none = { price: 0, green: 0, safety: 0, quiet: 0, liquidity: 0, walk: 0, builder: 0 };
+  const city = [
+    { psf_now: 5000, green_score: 80, noise_score: 20, liquidity_score: 90, walk_score: 70, builder_record: { delivery_pct: 80 } },
+    { psf_now: 20000, green_score: 10 },
+  ];
+  const ctx = priorityContext(city);
+
+  it('a slider of 0 ignores that bar, including a missing number', () => {
+    expect(passesPriorities({ green_score: 0 }, none, ctx)).toBe(true);
+    expect(passesPriorities({}, { ...none, green: 0 }, ctx)).toBe(true);
+  });
+  it('hides a project under the bar, and a project with no number when the city has that data', () => {
+    expect(passesPriorities({ green_score: 30 }, { ...none, green: 3 }, ctx)).toBe(true);
+    expect(passesPriorities({ green_score: 29 }, { ...none, green: 3 }, ctx)).toBe(false);
+    expect(passesPriorities({}, { ...none, green: 3 }, ctx)).toBe(false);
+  });
+  it('treats a higher price slider as cheaper, using the city band', () => {
+    const cheap = { psf_now: ctx.priceRange.min };
+    const dear = { psf_now: ctx.priceRange.max };
+    expect(passesPriorities(cheap, { ...none, price: 10 }, ctx)).toBe(true);
+    expect(passesPriorities(dear, { ...none, price: 5 }, ctx)).toBe(false);
+  });
+  it('quiet is the inverse of noise', () => {
+    expect(passesPriorities({ noise_score: 40 }, { ...none, quiet: 6 }, ctx)).toBe(true);
+    expect(passesPriorities({ noise_score: 41 }, { ...none, quiet: 6 }, ctx)).toBe(false);
+  });
+  it('skips a bar when the city has no values for it', () => {
+    const bare = priorityContext([{ green_score: 10 }]);
+    expect(bare.has.safety).toBe(false);
+    expect(passesPriorities({ green_score: 10 }, { ...none, safety: 10, green: 1 }, bare)).toBe(true);
   });
 });

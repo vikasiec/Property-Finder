@@ -12,15 +12,22 @@
   <div id="map"></div>
 
   <div class="topbar">
-    <button id="btn-guide" title="How this works">Guide</button>
-    <button id="btn-replay" title="Replay the intro">Replay</button>
-    <button id="btn-tour" title="Fly through the matches">Tour</button>
     <button id="btn-theme" title="Light or dark" aria-label="Switch light or dark"></button>
     <button id="btn-commute" title="Show societies within commute distance">Commute</button>
     <button id="btn-metro-search" title="Search along a metro line">Metro</button>
     <button id="btn-compare" title="Compare selected societies">Compare</button>
-    <button id="btn-log" title="Show or hide the right panel">Research log</button>
-    <button id="btn-hide" title="Hide panels for recording">Hide panels</button>
+    <button id="btn-localities" title="Compare localities">Localities</button>
+    <button id="btn-copyurl" title="Copy a link to these filters">Copy link</button>
+    <div class="topbar-overflow">
+      <button id="btn-overflow" title="More options" aria-label="More options">···</button>
+      <div class="overflow-menu" id="overflow-menu" hidden>
+        <button id="btn-guide">Guide</button>
+        <button id="btn-replay">Replay intro</button>
+        <button id="btn-tour">Fly through matches</button>
+        <button id="btn-log">Research log</button>
+        <button id="btn-hide">Hide panels</button>
+      </div>
+    </div>
     <button id="btn-mhide" class="mobile-only" title="Show or hide the panel">Hide panel</button>
   </div>
 
@@ -88,20 +95,50 @@
       </div>
     </section>
 
+    <section class="priorities" id="priorities">
+      <div class="k row">My priorities <button class="linkbtn" id="pri-reset" type="button">Reset</button></div>
+      <div class="pri-sliders">
+        <div class="pri-row"><span>Price</span><input type="range" data-pri="price" min="0" max="10" value="5" aria-label="Price priority"><span class="pri-val">5</span></div>
+        <div class="pri-row"><span>Greenery</span><input type="range" data-pri="green" min="0" max="10" value="3" aria-label="Greenery priority"><span class="pri-val">3</span></div>
+        <div class="pri-row"><span>Safety</span><input type="range" data-pri="safety" min="0" max="10" value="5" aria-label="Safety priority"><span class="pri-val">5</span></div>
+        <div class="pri-row"><span>Quiet</span><input type="range" data-pri="quiet" min="0" max="10" value="3" aria-label="Quiet priority"><span class="pri-val">3</span></div>
+        <div class="pri-row"><span>Liquidity</span><input type="range" data-pri="liquidity" min="0" max="10" value="4" aria-label="Liquidity priority"><span class="pri-val">4</span></div>
+        <div class="pri-row"><span>Walkability</span><input type="range" data-pri="walk" min="0" max="10" value="3" aria-label="Walkability priority"><span class="pri-val">3</span></div>
+        <div class="pri-row"><span>Builder</span><input type="range" data-pri="builder" min="0" max="10" value="3" aria-label="Builder priority"><span class="pri-val">3</span></div>
+      </div>
+      <p class="fine">Raise a slider to hide projects below that bar. 0 means ignore. A project with no number for a raised bar is hidden. If this city has no data for a bar, that slider is skipped. The score still leaves a missing number out of the average.</p>
+    </section>
+
     <div class="count">
       <div class="k">Matching societies</div>
       <div class="n" id="count">0</div>
       <div class="sub" id="count-sub"></div>
     </div>
     <div class="k row">Results <select id="f-sort" aria-label="Sort results">
-      <option value="best">Best match</option><option value="score">Property Finder score</option><option value="rating">Resident rating</option>
-      <option value="price">Price, low to high</option><option value="listings">Most listings</option><option value="distance">Nearest to pin</option><option value="station">Nearest to station</option>
-      <option value="liquidity">Resale liquidity</option><option value="builder">Builder track record</option>
-      <option value="trend-up">Price trend, fastest rising</option><option value="trend-stable">Price trend, most stable</option>
-      <option value="commute">Shortest drive</option>
-      <option value="rain-low">Least rainfall</option>
-      <option value="greenery">Greenest first</option></select>
-      <button class="linkbtn" id="btn-copyurl" title="Copy a link to these filters">Copy link</button></div>
+      <optgroup label="Relevance">
+        <option value="best">Best match</option>
+        <option value="decision">My priorities score</option>
+        <option value="score">Property Finder score</option>
+        <option value="rating">Resident rating</option>
+      </optgroup>
+      <optgroup label="Price">
+        <option value="price">Price, low to high</option>
+        <option value="listings">Most listings</option>
+        <option value="trend-up">Price trend, fastest rising</option>
+        <option value="trend-stable">Price trend, most stable</option>
+      </optgroup>
+      <optgroup label="Location">
+        <option value="distance">Nearest to pin</option>
+        <option value="station">Nearest to station</option>
+        <option value="commute">Shortest drive</option>
+      </optgroup>
+      <optgroup label="Quality">
+        <option value="liquidity">Resale liquidity</option>
+        <option value="builder">Builder track record</option>
+        <option value="greenery">Greenest first</option>
+        <option value="rain-low">Least rainfall</option>
+      </optgroup>
+    </select></div>
     <div id="results"></div>
 
     <div class="downloads">
@@ -220,6 +257,43 @@
       </div>
       <div class="commute-stats" id="commute-stats"></div>
       <button class="linkbtn" id="commute-clear">Clear pin</button>
+    </div>
+  </div>
+
+  <div class="modal" id="locality-modal" hidden>
+    <div class="locality-sheet">
+      <div class="k row">Locality Dashboard <button class="iconbtn" id="locality-close" aria-label="Close">×</button></div>
+      <div class="locality-controls">
+        <input type="search" id="loc-search" placeholder="Filter localities" aria-label="Filter localities">
+        <select id="loc-sort" aria-label="Sort localities">
+          <option value="count">Most societies</option>
+          <option value="price-low">Price low to high</option>
+          <option value="price-high">Price high to low</option>
+          <option value="green">Greenest</option>
+          <option value="safe">Safest</option>
+          <option value="quiet">Quietest</option>
+          <option value="liquid">Best liquidity</option>
+          <option value="rain-low">Least rain</option>
+        </select>
+      </div>
+      <div class="locality-table-wrap">
+        <table class="locality-table">
+          <thead>
+            <tr>
+              <th>Locality</th>
+              <th>Societies</th>
+              <th>Avg ₹/sqft</th>
+              <th>Green</th>
+              <th>Safety</th>
+              <th>Noise</th>
+              <th>Liquidity</th>
+              <th>Rain mm/yr</th>
+              <th>Walk</th>
+            </tr>
+          </thead>
+          <tbody id="loc-rows"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 

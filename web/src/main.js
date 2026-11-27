@@ -131,7 +131,7 @@ function syncUrlFromFilters() {
   const next = `${location.pathname}?${p.toString()}`;
   if (next !== `${location.pathname}${location.search}`) history.replaceState(null, '', next);
 }
-let data, byId, map, feed, selected = null, states = new Map(), tourTimer = null, cityId = 'gurgaon', details = null;
+let data, byId, map, feed, selected = null, states = new Map(), tourTimer = null, cityId = 'pune', details = null;
 let myList = [], allAmenities = [];
 const highlights = { glow: true, bounds: true, labels: true, ...store.get('ff-highlights', {}) };
 let commuteMode = false, commutePin = null, commuteMarker = null, commuteRadiusKm = 5, commuteTimeMode = 'radius';
@@ -143,8 +143,8 @@ let compareMode = false, compareList = [];
 let colorByMode = 'off';
 
 async function boot() {
-  const cities = await fetch('/data/cities.json').then((r) => r.json()).catch(() => ({ gurgaon: { name: 'Gurugram' } }));
-  cityId = cities[params.get('city')] ? params.get('city') : 'gurgaon';
+  const cities = await fetch('/data/cities.json').then((r) => r.json()).catch(() => ({ pune: { name: 'Pune' } }));
+  cityId = cities[params.get('city')] ? params.get('city') : 'pune';
   const [city, shapes] = await Promise.all([
     fetch(`/data/${cityId}.json`).then((r) => r.json()),
     fetch(`/data/${cityId}-shapes.geojson`).then((r) => r.json()),

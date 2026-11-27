@@ -1,0 +1,106 @@
+[
+  {
+    "name": "Thergaon, Pimpri Chinchwad - MPCB",
+    "lat": 18.61632,
+    "lng": 73.7658,
+    "aqi": 131,
+    "category": "Moderate",
+    "timestamp": "22-11-2026 00:00:00"
+  },
+  {
+    "name": "Park Street Wakad, Pimpri Chinchwad - MPCB",
+    "lat": 18.59051,
+    "lng": 73.77946,
+    "aqi": 143,
+    "category": "Moderate",
+    "timestamp": "22-11-2026 00:00:00"
+  },
+  {
+    "name": "Gavalinagar, Pimpri Chinchwad - MPCB",
+    "lat": 18.63673,
+    "lng": 73.82487,
+    "aqi": 160,
+    "category": "Moderate",
+    "timestamp": "22-11-2026 00:00:00"
+  },
+  {
+    "name": "Savta Mali Nagar, Pimpri-Chinchwad - IITM",
+    "lat": 18.61477,
+    "lng": 73.79952,
+    "aqi": 164,
+    "category": "Moderate",
+    "timestamp": "22-11-2026 00:00:00"
+  },
+  {
+    "name": "Bhosari, Pimpri-Chinchwad - IITM",
+    "lat": 18.64005,
+    "lng": 73.84896,
+    "aqi": 187,
+    "category": "Moderate",
+    "timestamp": "22-11-2026 00:00:00"
+  },
+  {
+    "name": "Bhumkar Nagar, Pimpri-Chinchwad - IITM",
+    "lat": 18.60577,
+    "lng": 73.74998,
+    "aqi": 168,
+    "category": "Moderate",
+    "timestamp": "22-11-2026 00:00:00"
+  },
+  {
+    "name": "Dhankawadi, Pune - IITM",
+    "lat": 18.45988,
+    "lng": 73.85219,
+    "aqi": 160,
+    "category": "Moderate",
+    "timestamp": "22-11-2026 00:00:00"
+  },
+  {
+    "name": "Katraj Dairy, Pune - MPCB",
+    "lat": 18.45445,
+    "lng": 73.85416,
+    "aqi": 96,
+    "category": "Satisfactory",
+    "timestamp": "22-11-2026 00:00:00"
+  },
+  {
+    "name": "Hadapsar, Pune - IITM",
+    "lat": 18.50179,
+    "lng": 73.92753,
+    "aqi": 192,
+    "category": "Moderate",
+    "timestamp": "22-11-2026 00:00:00"
+  },
+  {
+    "name": "Mhada Colony, Pune - IITM",
+    "lat": 18.57304,
+    "lng": 73.92772,
+    "aqi": 165,
+    "category": "Moderate",
+    "timestamp": "22-11-2026 00:00:00"
+  },
+  {
+    "name": "Panchawati_Pashan, Pune - IITM",
+    "lat": 18.53646,
+    "lng": 73.80545,
+    "aqi": 113,
+    "category": "Moderate",
+    "timestamp": "22-11-2026 00:00:00"
+  },
+  {
+    "name": "Revenue Colony-Shivajinagar, Pune - IITM",
+    "lat": 18.53008,
+    "lng": 73.8496,
+    "aqi": 169,
+    "category": "Moderate",
+    "timestamp": "22-11-2026 00:00:00"
+  },
+  {
+    "name": "Savitribai Phule Pune University, Pune - MPCB",
+    "lat": 18.54706,
+    "lng": 73.82691,
+    "aqi": 118,
+    "category": "Moderate",
+    "timestamp": "22-11-2026 00:00:00"
+  }
+]

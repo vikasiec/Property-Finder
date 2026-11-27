@@ -11,10 +11,10 @@ __pycache__/
 data/verified/*-ai.json.bak
 
 # Large generated web data (rebuild with build_city.py)
-web/public/data/*.json
 web/public/data/*.csv
-web/public/data/*.geojson
-!web/public/data/cities.json
+web/public/data/gurgaon*
+# Track JSON/geojson for Vercel deployment (Pune data)
+# CSVs are for local export only, not needed by frontend
 
 # Local artifacts
 pipeline/crawl_pune.log
